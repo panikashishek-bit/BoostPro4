@@ -1,0 +1,39 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Авто-деплой штаба: GitHub Actions → сервер по SSH.
+# Адаптировано из образца воркшопа (assets/deploy.yml.reference).
+#
+# Что делает: при каждом пуше в main GitHub-раннер заходит на сервер по SSH-ключу
+# и копирует содержимое ./public/ в папку DEPLOY_PATH. Деплой идёт ВНУТРИ Actions,
+# а НЕ с локального компьютера (никакого локального rsync).
+#
+# Секреты репозитория (Settings → Secrets and variables → Actions):
+#   SSH_HOST     — boostpro4-dkqfz.app.uno4.dev  (бокс UNO)
+#   SSH_USER     — uno
+#   SSH_KEY      — приватный ключ деплоя (целиком, с BEGIN/END)
+#   DEPLOY_PATH  — /home/uno/app
+#   SSH_PORT     — 30133 (у бокса UNO порт нестандартный, секрет обязателен)
+# ─────────────────────────────────────────────────────────────────────────────
+name: deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Забрать код репозитория
+        uses: actions/checkout@v4
+
+      - name: Скопировать сайт из ./public на сервер
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          source: "public/*"
+          target: ${{ secrets.DEPLOY_PATH }}
+          strip_components: 1   # убирает префикс public/ — файлы лягут прямо в DEPLOY_PATH
+          overwrite: true
