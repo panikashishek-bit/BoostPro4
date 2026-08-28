@@ -1,0 +1,82 @@
+// Модель данных учебного проекта «ПроСервис».
+// Обобщённый движок записи: услуга + мастер + график + бронь.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Услуга, на которую можно записаться (маникюр, стрижка, ...).
+model Service {
+  id          String          @id @default(cuid())
+  name        String
+  description String?
+  priceRub    Int
+  durationMin Int
+  isActive    Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  masters     MasterService[]
+  bookings    Booking[]
+}
+
+/// Мастер/специалист, оказывающий услуги.
+model Master {
+  id           String          @id @default(cuid())
+  name         String
+  specialty    String?
+  isActive     Boolean         @default(true)
+  createdAt    DateTime        @default(now())
+  services     MasterService[]
+  workingHours WorkingHour[]
+  bookings     Booking[]
+}
+
+/// Связь many-to-many: какой мастер какие услуги делает.
+model MasterService {
+  masterId  String
+  serviceId String
+  master    Master  @relation(fields: [masterId], references: [id], onDelete: Cascade)
+  service   Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@id([masterId, serviceId])
+}
+
+/// График работы мастера по дням недели (1 = понедельник ... 7 = воскресенье).
+model WorkingHour {
+  id       String @id @default(cuid())
+  masterId String
+  master   Master @relation(fields: [masterId], references: [id], onDelete: Cascade)
+  weekday  Int
+  startMin Int // минут от полуночи, напр. 600 = 10:00
+  endMin   Int // напр. 1200 = 20:00
+
+  @@index([masterId])
+}
+
+/// Запись клиента к мастеру на услугу.
+model Booking {
+  id          String        @id @default(cuid())
+  masterId    String
+  serviceId   String
+  master      Master        @relation(fields: [masterId], references: [id])
+  service     Service       @relation(fields: [serviceId], references: [id])
+  startAt     DateTime
+  endAt       DateTime
+  status      BookingStatus @default(CONFIRMED)
+  clientName  String
+  clientPhone String
+  comment     String?
+  createdAt   DateTime      @default(now())
+
+  @@index([masterId, startAt])
+}
+
+enum BookingStatus {
+  CONFIRMED
+  CANCELLED
+  DONE
+}

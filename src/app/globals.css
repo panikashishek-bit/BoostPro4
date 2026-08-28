@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+/* Дизайн-токены проекта. Чтобы перекрасить тему — меняйте значения здесь. */
+@theme {
+  --color-bg: #faf9f6;
+  --color-surface: #ffffff;
+  --color-ink: #1b1a17;
+  --color-muted: #6f6b66;
+  --color-line: #ece9e2;
+  --color-brand: #0e7c66;
+  --color-brand-dark: #0b6353;
+  --color-brand-soft: #e7f2ee;
+
+  --font-sans: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-unbounded), var(--font-manrope), sans-serif;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Видимый фокус с клавиатуры (доступность) */
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Уважаем системную настройку «меньше движения» */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

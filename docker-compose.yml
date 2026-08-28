@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: proservice-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: proservice
+      POSTGRES_PASSWORD: proservice
+      POSTGRES_DB: proservice
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - proservice-db-data:/var/lib/postgresql/data
+
+volumes:
+  proservice-db-data:
