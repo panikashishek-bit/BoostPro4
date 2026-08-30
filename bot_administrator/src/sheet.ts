@@ -48,9 +48,12 @@ let layout: Layout | undefined;
 
 function sheets(): sheets_v4.Sheets {
   if (!client) {
+    // Служебный аккаунт: боту не нужен вход в браузере, он программа и живёт на сервере.
+    // Ключ приходит либо переменной (в контейнере), либо файлом (локально).
     const auth = new google.auth.GoogleAuth({
-      // Служебный аккаунт: боту не нужен вход в браузере, он программа и живёт на сервере.
-      keyFile: config.googleSaKeyPath,
+      ...(config.googleSaKey
+        ? { credentials: JSON.parse(config.googleSaKey) as Record<string, string> }
+        : { keyFile: config.googleSaKeyPath }),
       scopes: ["https://www.googleapis.com/auth/spreadsheets"],
     });
     client = google.sheets({ version: "v4", auth });
@@ -77,13 +80,21 @@ function columnLetter(index: number): string {
  * просто без записи в таблицу.
  */
 export async function connect(): Promise<boolean> {
+  if (!config.sheetId || (!config.googleSaKey && !config.googleSaKeyPath)) {
+    console.warn(
+      "[журнал] не настроен: нужны SHEET_ID и ключ служебного аккаунта " +
+        "(GOOGLE_SA_KEY с JSON или GOOGLE_SA_KEY_PATH с путём к файлу)."
+    );
+    return false;
+  }
+
   try {
-    const meta = await sheets().spreadsheets.get({ spreadsheetId: config.sheetId });
+    const meta = await sheets().spreadsheets.get({ spreadsheetId: config.sheetId! });
     const tab = meta.data.sheets?.[0]?.properties?.title;
     if (!tab) throw new Error("в таблице нет ни одного листа");
 
     const head = await sheets().spreadsheets.values.get({
-      spreadsheetId: config.sheetId,
+      spreadsheetId: config.sheetId!,
       range: `${tab}!1:1`,
     });
     const headers = (head.data.values?.[0] ?? []).map((cell) => String(cell).trim());
@@ -141,7 +152,7 @@ export async function appendRow(row: Row): Promise<number | null> {
   if (!layout) return null;
   try {
     const result = await sheets().spreadsheets.values.append({
-      spreadsheetId: config.sheetId,
+      spreadsheetId: config.sheetId!,
       range: range(),
       valueInputOption: "RAW",
       insertDataOption: "INSERT_ROWS",
@@ -175,7 +186,7 @@ export async function updateRow(rowNumber: number, id: string, row: Row): Promis
     if (keyColumn !== undefined) {
       const letter = columnLetter(keyColumn);
       const cell = await sheets().spreadsheets.values.get({
-        spreadsheetId: config.sheetId,
+        spreadsheetId: config.sheetId!,
         range: `${layout.tab}!${letter}${rowNumber}`,
       });
       if (cell.data.values?.[0]?.[0] !== id) {
@@ -189,7 +200,7 @@ export async function updateRow(rowNumber: number, id: string, row: Row): Promis
     }
 
     await sheets().spreadsheets.values.update({
-      spreadsheetId: config.sheetId,
+      spreadsheetId: config.sheetId!,
       range: range(target),
       valueInputOption: "RAW",
       requestBody: { values: [toCells(row)] },
@@ -204,7 +215,7 @@ export async function updateRow(rowNumber: number, id: string, row: Row): Promis
 /** Ищет строку обращения по ключу в колонке «Обращение». */
 async function findRowById(id: string, letter: string): Promise<number | null> {
   const column = await sheets().spreadsheets.values.get({
-    spreadsheetId: config.sheetId,
+    spreadsheetId: config.sheetId!,
     range: `${layout!.tab}!${letter}:${letter}`,
   });
   const at = (column.data.values ?? []).findIndex((cells) => cells[0] === id);

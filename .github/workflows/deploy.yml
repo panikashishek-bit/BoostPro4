@@ -81,27 +81,28 @@ jobs:
             ENVFILE
             chmod 600 .env
 
-            # Ключ служебного аккаунта для журнала обращений в Google-таблице.
-            # Кладём файлом, а не переменной: клиент googleapis читает именно файл,
-            # а перенос строк в приватном ключе через env выживает плохо.
-            # Кавычки вокруг метки — чтобы шелл не тронул содержимое JSON.
-            mkdir -p .secrets
-            cat > .secrets/google-bot.json <<'KEYFILE'
+            # Ключ служебного аккаунта для журнала обращений — в .env одной строкой.
+            # Переносы строк убираем: в JSON они незначимы, а внутри приватного ключа
+            # стоят экранированные последовательности, их tr не трогает.
+            # Одинарные кавычки безопасны: в JSON их нет, а compose снимает их сам.
+            cat > sa-key.json <<'KEYFILE'
             ${{ secrets.GOOGLE_SA_KEY }}
             KEYFILE
-            chmod 600 .secrets/google-bot.json
 
             # Проверяем ключ, но связку из-за него не роняем: без журнала бот работает,
             # а вот без бота салон остаётся без ответов. Плохой ключ — предупреждение
             # сейчас и падение job в самом конце, когда всё уже поднято.
             KEY_OK=1
-            if [ ! -s .secrets/google-bot.json ] || ! head -c 1 .secrets/google-bot.json | grep -q '{'; then
-              echo "ВНИМАНИЕ: .secrets/google-bot.json пуст или не похож на JSON."
-              echo "Проверьте секрет GOOGLE_SA_KEY — журнал обращений писаться не будет."
+            if [ ! -s sa-key.json ] || ! head -c 1 sa-key.json | grep -q "{"; then
+              echo "ВНИМАНИЕ: секрет GOOGLE_SA_KEY пуст или не похож на JSON."
+              echo "Журнал обращений писаться не будет."
               KEY_OK=0
             else
-              echo "ключ служебного аккаунта на месте ($(wc -c < .secrets/google-bot.json) байт)"
+              echo "ключ служебного аккаунта получен ($(wc -c < sa-key.json) байт)"
+              KEY_LINE=$(tr -d "\n" < sa-key.json)
+              echo "GOOGLE_SA_KEY='$KEY_LINE'" >> .env
             fi
+            rm -f sa-key.json
 
             echo "=== сборка и запуск ==="
             docker compose -f docker-compose.prod.yml up -d --build --remove-orphans

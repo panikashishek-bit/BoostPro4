@@ -8,6 +8,11 @@ import { dirname, resolve } from "node:path";
 /** Читает обязательную переменную. Падает сразу со внятным текстом, а не позже и невнятно. */
 const BOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
+/** Читает необязательную переменную. Пустая и незаданная — одно и то же. */
+function optional(name: string): string | undefined {
+  return process.env[name]?.trim() || undefined;
+}
+
 function required(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) {
@@ -27,11 +32,21 @@ export const config = {
   assemblyAiApiKey: required("ASSEMBLYAI_API_KEY"),
 
   /**
-   * Журнал обращений в Google-таблице. Путь к ключу разрешаем от папки бота:
-   * в .env удобно писать «../.secrets/google-bot.json», а на сервере — абсолютный.
+   * Ключ служебного аккаунта для журнала обращений — двумя способами.
+   *
+   * Локально удобнее файлом: GOOGLE_SA_KEY_PATH, путь разрешается от папки бота
+   * («../.secrets/google-bot.json»). В контейнере — переменной GOOGLE_SA_KEY с тем же
+   * JSON в одну строку: пробрасывать файл внутрь оказалось ненадёжно, а ключ в переменной
+   * не зависит ни от путей, ни от того, как хост понимает монтирование.
+   *
+   * Задан хотя бы один — журнал работает. Не задан ни один — бот работает без журнала:
+   * ронять из-за этого разговоры с клиентами незачем.
    */
-  googleSaKeyPath: resolve(BOT_DIR, required("GOOGLE_SA_KEY_PATH")),
-  sheetId: required("SHEET_ID"),
+  googleSaKey: optional("GOOGLE_SA_KEY"),
+  googleSaKeyPath: optional("GOOGLE_SA_KEY_PATH")
+    ? resolve(BOT_DIR, optional("GOOGLE_SA_KEY_PATH")!)
+    : undefined,
+  sheetId: optional("SHEET_ID"),
 
   /** Адрес OpenRouter: API совместим с OpenAI, поэтому годится обычный chat/completions. */
   openRouterBaseUrl: "https://openrouter.ai/api/v1",
