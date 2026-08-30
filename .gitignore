@@ -43,3 +43,7 @@ bot_administrator/data/
 
 # ключи Google (service account, OAuth) — секреты, в git не попадают
 .secrets/
+
+# выгрузка журнала обращений: имена и телефоны клиентов, репозиторий публичный.
+# Собирается заново командой npm run export:clients в bot_administrator/.
+clients-export.md
