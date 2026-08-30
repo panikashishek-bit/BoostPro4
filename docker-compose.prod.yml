@@ -50,7 +50,7 @@ services:
       APP_API_URL: ${APP_API_URL}
       # Журнал обращений в Google-таблице. Путь абсолютный — это точка монтирования ниже,
       # в образ ключ не копируется и в git не попадает.
-      GOOGLE_SA_KEY_PATH: /run/secrets/google-bot.json
+      GOOGLE_SA_KEY_PATH: /srv/secrets/google-bot.json
       SHEET_ID: ${SHEET_ID}
     depends_on:
       - app
@@ -59,7 +59,10 @@ services:
       # оказывался бы посреди записи с ботом, который всё забыл.
       - bot-data:/srv/bot_administrator/data
       # Ключ служебного аккаунта: только на чтение, рядом с .env кладёт его тот же деплой.
-      - ./.secrets/google-bot.json:/run/secrets/google-bot.json:ro
+      # Монтируем КАТАЛОГ, а не файл: отсутствующий файл Docker отвергает целиком
+      # («invalid volume specification») и роняет заодно и приложение, а отсутствующий
+      # каталог просто создаёт. Журнал не должен уметь уронить связку.
+      - ./.secrets:/srv/secrets:ro
 
 volumes:
   db-data:

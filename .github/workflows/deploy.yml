@@ -91,6 +91,18 @@ jobs:
             KEYFILE
             chmod 600 .secrets/google-bot.json
 
+            # Проверяем ключ, но связку из-за него не роняем: без журнала бот работает,
+            # а вот без бота салон остаётся без ответов. Плохой ключ — предупреждение
+            # сейчас и падение job в самом конце, когда всё уже поднято.
+            KEY_OK=1
+            if [ ! -s .secrets/google-bot.json ] || ! head -c 1 .secrets/google-bot.json | grep -q '{'; then
+              echo "ВНИМАНИЕ: .secrets/google-bot.json пуст или не похож на JSON."
+              echo "Проверьте секрет GOOGLE_SA_KEY — журнал обращений писаться не будет."
+              KEY_OK=0
+            else
+              echo "ключ служебного аккаунта на месте ($(wc -c < .secrets/google-bot.json) байт)"
+            fi
+
             echo "=== сборка и запуск ==="
             docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
 
@@ -119,3 +131,6 @@ jobs:
             docker compose -f docker-compose.prod.yml ps
             echo "=== последние строки лога бота ==="
             docker compose -f docker-compose.prod.yml logs --tail=15 bot
+
+            # Связка поднята — теперь можно и упасть, чтобы проблема с ключом не потерялась.
+            [ "$KEY_OK" = "1" ] || { echo "деплой прошёл, но журнал обращений не настроен"; exit 1; }
