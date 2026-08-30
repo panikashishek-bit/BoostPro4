@@ -40,3 +40,6 @@ Thumbs.db
 
 # история диалогов бота: содержит имена и телефоны клиентов
 bot_administrator/data/
+
+# ключи Google (service account, OAuth) — секреты, в git не попадают
+.secrets/
