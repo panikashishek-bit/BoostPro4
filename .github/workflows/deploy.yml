@@ -7,6 +7,7 @@
 #
 # Секреты (Settings → Secrets and variables → Actions):
 #   доступ:   SSH_HOST · SSH_USER · SSH_KEY · SSH_PORT · DEPLOY_PATH · SERVER_PATH
+#   журнал:   SHEET_ID (id таблицы «Клиенты») · GOOGLE_SA_KEY (JSON служебного аккаунта целиком)
 #   сервисы:  TELEGRAM_BOT_TOKEN · OPENROUTER_API_KEY · ASSEMBLYAI_API_KEY
 #   свои:     APP_API_KEY · APP_API_URL · ADMIN_PASSWORD · POSTGRES_PASSWORD
 #
@@ -76,8 +77,19 @@ jobs:
             APP_API_URL=${{ secrets.APP_API_URL }}
             ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}
             POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+            SHEET_ID=${{ secrets.SHEET_ID }}
             ENVFILE
             chmod 600 .env
+
+            # Ключ служебного аккаунта для журнала обращений в Google-таблице.
+            # Кладём файлом, а не переменной: клиент googleapis читает именно файл,
+            # а перенос строк в приватном ключе через env выживает плохо.
+            # Кавычки вокруг метки — чтобы шелл не тронул содержимое JSON.
+            mkdir -p .secrets
+            cat > .secrets/google-bot.json <<'KEYFILE'
+            ${{ secrets.GOOGLE_SA_KEY }}
+            KEYFILE
+            chmod 600 .secrets/google-bot.json
 
             echo "=== сборка и запуск ==="
             docker compose -f docker-compose.prod.yml up -d --build --remove-orphans

@@ -48,12 +48,18 @@ services:
       ASSEMBLYAI_API_KEY: ${ASSEMBLYAI_API_KEY}
       APP_API_KEY: ${APP_API_KEY}
       APP_API_URL: ${APP_API_URL}
+      # Журнал обращений в Google-таблице. Путь абсолютный — это точка монтирования ниже,
+      # в образ ключ не копируется и в git не попадает.
+      GOOGLE_SA_KEY_PATH: /run/secrets/google-bot.json
+      SHEET_ID: ${SHEET_ID}
     depends_on:
       - app
-    # История диалогов переживает передеплой: без тома клиент после обновления
-    # оказывался бы посреди записи с ботом, который всё забыл.
     volumes:
+      # История диалогов переживает передеплой: без тома клиент после обновления
+      # оказывался бы посреди записи с ботом, который всё забыл.
       - bot-data:/srv/bot_administrator/data
+      # Ключ служебного аккаунта: только на чтение, рядом с .env кладёт его тот же деплой.
+      - ./.secrets/google-bot.json:/run/secrets/google-bot.json:ro
 
 volumes:
   db-data:
