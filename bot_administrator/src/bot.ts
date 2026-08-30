@@ -10,6 +10,15 @@ import { respond } from "./agent.js";
 import { forget, getHistory, remember } from "./memory.js";
 import { transcribe } from "./speech.js";
 import { ServiceError } from "./retry.js";
+import {
+  beginTurn,
+  close as closeSession,
+  closeAll,
+  initJournal,
+  recordFailure,
+  recordTurn,
+  type Channel,
+} from "./session.js";
 
 const bot = new Bot(config.telegramBotToken);
 
@@ -52,27 +61,41 @@ bot.use(async (ctx, next) => {
 });
 
 bot.command("start", async (ctx) => {
+  // Клиент начал заново — прежнее обращение закрываем, иначе два разговора
+  // склеятся в одну строку журнала.
+  await closeSession(ctx.chat.id);
   forget(ctx.chat.id);
   await ctx.reply(GREETING);
 });
 
 /** Отвечает на вопрос клиента. Текст и расшифрованный голос идут здесь одной дорогой. */
-async function answer(ctx: Context, chatId: number, question: string): Promise<void> {
+async function answer(
+  ctx: Context,
+  chatId: number,
+  question: string,
+  channel: Channel
+): Promise<void> {
   // Ответ модели занимает секунды — показываем «печатает», чтобы клиент не ушёл.
   await ctx.replyWithChatAction("typing");
 
+  // Обращение заводим ДО ответа модели: даже если она сейчас упадёт,
+  // владелец увидит в таблице, что клиент приходил.
+  await beginTurn(chatId, channel);
+
   try {
-    const reply = await respond(systemPrompt, getHistory(chatId), question);
+    const { text, trace } = await respond(systemPrompt, getHistory(chatId), question);
     remember(chatId, { role: "user", content: question });
-    remember(chatId, { role: "assistant", content: reply });
-    console.log(`[ответ] ${reply.replace(/\n/g, " ").slice(0, 120)}…`);
-    await ctx.reply(trim(reply));
+    remember(chatId, { role: "assistant", content: text });
+    console.log(`[ответ] ${text.replace(/\n/g, " ").slice(0, 120)}…`);
+    await ctx.reply(trim(text));
+    await recordTurn(chatId, question, text, trace);
   } catch (error) {
     // Неудачный обмен в историю не пишем, иначе он будет мешать следующим ответам.
     console.error("[ошибка] запрос к модели не удался:", error);
     const reason =
       error instanceof ServiceError ? error.clientMessage : "Извините, сейчас не могу ответить.";
     await ctx.reply(failureReply(reason));
+    await recordFailure(chatId, question);
   }
 }
 
@@ -94,7 +117,7 @@ bot.on("message:text", async (ctx) => {
     );
     return;
   }
-  await answer(ctx, ctx.chat.id, question);
+  await answer(ctx, ctx.chat.id, question, "текст");
 });
 
 bot.on("message:voice", async (ctx) => {
@@ -130,7 +153,7 @@ bot.on("message:voice", async (ctx) => {
   // а не после того, как его запишут не на ту услугу.
   await ctx.reply(`🎧 Расслышала так: «${text}»`);
 
-  await answer(ctx, ctx.chat.id, text);
+  await answer(ctx, ctx.chat.id, text, "голос");
 });
 
 // Остальные вложения — фото, видео, документы — бот не понимает.
@@ -171,8 +194,15 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, async () => {
     console.log(`[стоп] получен ${signal}, останавливаю опрос`);
     await bot.stop();
+    // Открытые обращения дописываем перед выходом, иначе они навсегда
+    // останутся в таблице «в разговоре».
+    await closeAll();
   });
 }
+
+// Доступ к таблице проверяем на старте: ошибку в ключе или в расшаривании
+// лучше увидеть в логе сейчас, чем на первом клиенте.
+await initJournal();
 
 const me = await bot.api.getMe();
 console.log(`[старт] бот @${me.username} на связи, модель ${config.model}`);

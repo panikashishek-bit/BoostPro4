@@ -8,10 +8,12 @@
     "start": "tsx --env-file=.env src/bot.ts",
     "dev": "tsx watch --env-file=.env src/bot.ts",
     "typecheck": "tsc --noEmit",
-    "smoke": "tsx --env-file=.env smoke.ts"
+    "smoke": "tsx --env-file=.env smoke.ts",
+    "smoke:journal": "tsx --env-file=.env smoke-journal.ts"
   },
   "dependencies": {
     "assemblyai": "^4.37.0",
+    "googleapis": "^176.0.0",
     "grammy": "^1.30.0"
   },
   "devDependencies": {

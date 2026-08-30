@@ -191,8 +191,9 @@ async function createBooking(args: BookingArgs) {
     };
   }
 
+  let created: { id: string };
   try {
-    await api.createBooking({
+    created = await api.createBooking({
       serviceId: service.id,
       masterId: master!.id,
       startISO: slot.startISO,
@@ -210,6 +211,9 @@ async function createBooking(args: BookingArgs) {
   return {
     ok: true,
     booked: {
+      // id записи модели не нужен и клиенту тем более — он нужен журналу обращений,
+      // чтобы строку в таблице можно было сверить с записью в базе продукта.
+      bookingId: created.id,
       service: service.name,
       master: master!.name,
       date: args.date,

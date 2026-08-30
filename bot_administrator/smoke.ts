@@ -10,10 +10,11 @@ const history: ChatMessage[] = [];
 
 async function say(label: string, q: string) {
   console.log(`\n──────── ${label} ────────\nКЛИЕНТ: ${q}`);
-  const a = await respond(prompt, history, q);
-  console.log(`БОТ: ${a}`);
-  history.push({ role: "user", content: q }, { role: "assistant", content: a });
-  return a;
+  const { text, trace } = await respond(prompt, history, q);
+  console.log(`БОТ: ${text}`);
+  if (trace.length) console.log(`  (инструменты: ${trace.map((t) => t.name).join(", ")})`);
+  history.push({ role: "user", content: q }, { role: "assistant", content: text });
+  return text;
 }
 
 // (а) Консультация по базе знаний — API дёргать не должен
