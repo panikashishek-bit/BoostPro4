@@ -37,3 +37,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.pem
+
+# история диалогов бота: содержит имена и телефоны клиентов
+bot_administrator/data/

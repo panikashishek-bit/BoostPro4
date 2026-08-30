@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { withErrorHandling } from "@/lib/api-errors";
 import { getAvailableSlots } from "@/lib/availability";
 
 export const dynamic = "force-dynamic";
 
 // GET /api/availability?masterId=&serviceId=&date=YYYY-MM-DD — свободные слоты.
-export async function GET(req: NextRequest) {
+export const GET = withErrorHandling(async (req: NextRequest) => {
   const params = req.nextUrl.searchParams;
   const masterId = params.get("masterId");
   const serviceId = params.get("serviceId");
@@ -25,4 +26,4 @@ export async function GET(req: NextRequest) {
 
   const slots = await getAvailableSlots({ masterId, durationMin: service.durationMin, date });
   return NextResponse.json(slots);
-}
+});

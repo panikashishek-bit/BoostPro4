@@ -1,23 +1,23 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Авто-деплой штаба: GitHub Actions → сервер по SSH.
-# Адаптировано из образца воркшопа (assets/deploy.yml.reference).
+# Авто-деплой: GitHub Actions → сервер по SSH. Запускается на каждый пуш в main.
 #
-# Что делает: при каждом пуше в main GitHub-раннер заходит на сервер по SSH-ключу
-# и копирует содержимое ./public/ в папку DEPLOY_PATH. Деплой идёт ВНУТРИ Actions,
-# а НЕ с локального компьютера (никакого локального rsync).
+# Две части:
+#   1) штаб — статика из ./public в DEPLOY_PATH (как на Воркшопе 1, не меняли);
+#   2) связка — база, приложение и бот в Docker Compose, работают 24/7.
 #
-# Секреты репозитория (Settings → Secrets and variables → Actions):
-#   SSH_HOST     — boostpro4-dkqfz.app.uno4.dev  (бокс UNO)
-#   SSH_USER     — uno
-#   SSH_KEY      — приватный ключ деплоя (целиком, с BEGIN/END)
-#   DEPLOY_PATH  — /home/uno/app
-#   SSH_PORT     — 30133 (у бокса UNO порт нестандартный, секрет обязателен)
+# Секреты (Settings → Secrets and variables → Actions):
+#   доступ:   SSH_HOST · SSH_USER · SSH_KEY · SSH_PORT · DEPLOY_PATH · SERVER_PATH
+#   сервисы:  TELEGRAM_BOT_TOKEN · OPENROUTER_API_KEY · ASSEMBLYAI_API_KEY
+#   свои:     APP_API_KEY · APP_API_URL · ADMIN_PASSWORD · POSTGRES_PASSWORD
+#
+# Секретов в репозитории нет: .env собирается на сервере во время деплоя.
 # ─────────────────────────────────────────────────────────────────────────────
 name: deploy
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -26,7 +26,7 @@ jobs:
       - name: Забрать код репозитория
         uses: actions/checkout@v4
 
-      - name: Скопировать сайт из ./public на сервер
+      - name: Скопировать штаб из ./public на сервер
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -35,5 +35,75 @@ jobs:
           port: ${{ secrets.SSH_PORT || 22 }}
           source: "public/*"
           target: ${{ secrets.DEPLOY_PATH }}
-          strip_components: 1   # убирает префикс public/ — файлы лягут прямо в DEPLOY_PATH
+          strip_components: 1
           overwrite: true
+
+      - name: Скопировать исходники приложения и бота
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          source: "src,prisma,public,faq,bot_administrator,package.json,package-lock.json,next.config.ts,tsconfig.json,postcss.config.mjs,Dockerfile,.dockerignore,docker-compose.prod.yml"
+          target: ${{ secrets.SERVER_PATH }}
+          overwrite: true
+          rm: false
+
+      - name: Собрать .env и поднять связку
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          SERVER_PATH: ${{ secrets.SERVER_PATH }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 20m
+          envs: SERVER_PATH
+          script: |
+            set -e
+            cd "$SERVER_PATH"
+
+            # .env пишется здесь и остаётся только на сервере. Права 600:
+            # файл содержит все ключи, читать его посторонним незачем.
+            umask 077
+            cat > .env <<ENVFILE
+            TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+            OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
+            ASSEMBLYAI_API_KEY=${{ secrets.ASSEMBLYAI_API_KEY }}
+            APP_API_KEY=${{ secrets.APP_API_KEY }}
+            APP_API_URL=${{ secrets.APP_API_URL }}
+            ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}
+            POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+            ENVFILE
+            chmod 600 .env
+
+            echo "=== сборка и запуск ==="
+            docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
+
+            echo "=== ждём, пока приложение ответит ==="
+            for i in $(seq 1 60); do
+              if docker compose -f docker-compose.prod.yml exec -T app \
+                   node -e "fetch('http://localhost:3000/api/services',{headers:{'x-api-key':process.env.APP_API_KEY}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" 2>/dev/null; then
+                echo "приложение отвечает (через $i с)"; break
+              fi
+              [ "$i" = "60" ] && { echo "приложение не поднялось"; docker compose -f docker-compose.prod.yml logs --tail=50 app; exit 1; }
+              sleep 1
+            done
+
+            # Наливаем демо-данные только в пустую базу: seed чистит таблицы,
+            # и на живой базе он стёр бы реальные записи клиентов.
+            COUNT=$(docker compose -f docker-compose.prod.yml exec -T db \
+              psql -U proservice -d proservice -tAc 'SELECT COUNT(*) FROM "Service"' 2>/dev/null || echo 0)
+            if [ "$COUNT" = "0" ]; then
+              echo "=== база пустая, наливаю seed ==="
+              docker compose -f docker-compose.prod.yml exec -T app npx tsx prisma/seed.ts
+            else
+              echo "=== в базе уже $COUNT услуг, seed пропускаю ==="
+            fi
+
+            echo "=== состояние ==="
+            docker compose -f docker-compose.prod.yml ps
+            echo "=== последние строки лога бота ==="
+            docker compose -f docker-compose.prod.yml logs --tail=15 bot

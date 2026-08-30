@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { withErrorHandling } from "@/lib/api-errors";
 
 export const dynamic = "force-dynamic";
 
 // POST /api/bookings — создать запись.
-export async function POST(req: NextRequest) {
+export const POST = withErrorHandling(async (req: NextRequest) => {
   let body: {
     serviceId?: string;
     masterId?: string;
@@ -67,4 +68,4 @@ export async function POST(req: NextRequest) {
   });
 
   return NextResponse.json({ id: booking.id }, { status: 201 });
-}
+});

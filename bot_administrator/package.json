@@ -1,0 +1,22 @@
+{
+  "name": "bot-administrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Telegram-бот-администратор: отвечает клиентам и записывает на услуги",
+  "scripts": {
+    "start": "tsx --env-file=.env src/bot.ts",
+    "dev": "tsx watch --env-file=.env src/bot.ts",
+    "typecheck": "tsc --noEmit",
+    "smoke": "tsx --env-file=.env smoke.ts"
+  },
+  "dependencies": {
+    "assemblyai": "^4.37.0",
+    "grammy": "^1.30.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

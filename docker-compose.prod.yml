@@ -1,0 +1,60 @@
+# Боевая связка на сервере: база + приложение + бот.
+# Значения берутся из .env рядом — его пишет GitHub Actions из секретов репозитория,
+# в git этот файл не попадает.
+#
+# restart: unless-stopped — это и есть «работает без моего компьютера»:
+# контейнеры сами поднимаются после падения и после перезагрузки сервера.
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: proservice
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: proservice
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    # Наружу порт не открываем: база доступна только внутри сети compose.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U proservice"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://proservice:${POSTGRES_PASSWORD}@db:5432/proservice
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      APP_API_KEY: ${APP_API_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+    # Только на локальный интерфейс: снаружи API не нужно, бот ходит по сети compose.
+    # Порт 80 на сервере занят статикой штаба из Воркшопа 1 — её не трогаем.
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  bot:
+    build:
+      context: .
+      dockerfile: bot_administrator/Dockerfile
+    restart: unless-stopped
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      ASSEMBLYAI_API_KEY: ${ASSEMBLYAI_API_KEY}
+      APP_API_KEY: ${APP_API_KEY}
+      APP_API_URL: ${APP_API_URL}
+    depends_on:
+      - app
+    # История диалогов переживает передеплой: без тома клиент после обновления
+    # оказывался бы посреди записи с ботом, который всё забыл.
+    volumes:
+      - bot-data:/srv/bot_administrator/data
+
+volumes:
+  db-data:
+  bot-data:

@@ -1,0 +1,14 @@
+node_modules
+.next
+.git
+.env
+.env.*
+!.env.example
+bot_administrator/node_modules
+bot_administrator/data
+bot_administrator/.env
+bot_administrator/.env.*
+!bot_administrator/.env.example
+docs
+journal
+*.log
