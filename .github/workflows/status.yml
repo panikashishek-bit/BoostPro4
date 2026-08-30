@@ -1,0 +1,30 @@
+# Посмотреть, что происходит на сервере, не заходя туда руками.
+# SSH-ключ лежит только в секретах репозитория, поэтому смотрим через Actions.
+# Запуск: gh workflow run status.yml  (или кнопкой Run workflow на вкладке Actions)
+name: status
+
+on:
+  workflow_dispatch:
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Состояние контейнеров и логи бота
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          SERVER_PATH: ${{ secrets.SERVER_PATH }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          envs: SERVER_PATH
+          script: |
+            cd "$SERVER_PATH"
+            echo "=== КОНТЕЙНЕРЫ ==="
+            docker compose -f docker-compose.prod.yml ps
+            echo "=== ЛОГ БОТА (последние 40 строк) ==="
+            docker compose -f docker-compose.prod.yml logs --tail=40 --no-log-prefix bot
+            echo "=== ЛОГ ПРИЛОЖЕНИЯ (последние 15 строк) ==="
+            docker compose -f docker-compose.prod.yml logs --tail=15 --no-log-prefix app
