@@ -97,13 +97,19 @@ export function logEvent(event: EventName, fields: Fields): number | null {
   const database = connect();
   if (!database) return null;
 
+  // Обращение могло ещё не открыться: сбой на первом же обращении к Telegram
+  // прилетает в bot.catch раньше, чем beginTurn успел завести сессию. Пустой
+  // session_id разорвал бы связь события с обращением, и в базе появилась бы
+  // строка-сирота, которую не с чем сопоставить. Метка честнее пустоты.
+  const sessionId = fields.sessionId || `${fields.chatId}-no-session`;
+
   try {
     const result = database
       .prepare(
         `INSERT INTO events (ts, session_id, chat_id, event, details, gist, is_demo)
          VALUES (?, ?, ?, ?, ?, '', '')`
       )
-      .run(moment(Date.now()), fields.sessionId, String(fields.chatId), event, fields.details ?? "");
+      .run(moment(Date.now()), sessionId, String(fields.chatId), event, fields.details ?? "");
     return Number(result.lastInsertRowid);
   } catch (error) {
     console.error(`[события] не записал ${event}:`, error);

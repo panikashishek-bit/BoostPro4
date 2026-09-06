@@ -94,7 +94,24 @@ async function answer(
     remember(chatId, { role: "user", content: question });
     remember(chatId, { role: "assistant", content: text });
     console.log(`[ответ] ${text.replace(/\n/g, " ").slice(0, 120)}…`);
-    await ctx.reply(trim(text));
+    // Отправку изолируем от всего, что идёт после неё.
+    //
+    // К этому моменту инструменты УЖЕ отработали, и запись клиента, возможно, уже
+    // создана в базе салона. Откажи Telegram именно сейчас (429, обрыв сети) — общий
+    // catch ниже увёл бы нас в recordFailure, а он не принимает trace. Реальная запись
+    // уехала бы в таблицу как «ошибка API», а целевое действие не попало бы в лог
+    // вообще. Клиент при этом всё равно записан — врать об этом журналу нельзя.
+    try {
+      await ctx.reply(trim(text));
+    } catch (sendError) {
+      console.error("[ошибка] ответ не доставлен клиенту:", sendError);
+      logEvent("error", {
+        sessionId: sessionIdOf(chatId) ?? "",
+        chatId,
+        details: "ответ не доставлен",
+      });
+    }
+
     // Клиент уже с ответом — теперь можно и сходить в модель за пометкой для журнала.
     describeFirstMessage(chatId, question);
     await recordTurn(chatId, question, text, trace);
