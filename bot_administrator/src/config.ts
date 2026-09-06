@@ -24,6 +24,12 @@ function required(name: string): string {
   return value;
 }
 
+/** Читает положительное число. Мусор и ноль игнорируем — молча сломанный таймаут хуже умолчания. */
+function positiveNumber(name: string, fallback: number): number {
+  const raw = Number(process.env[name]?.trim());
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+}
+
 export const config = {
   telegramBotToken: required("TELEGRAM_BOT_TOKEN"),
   openRouterApiKey: required("OPENROUTER_API_KEY"),
@@ -47,6 +53,27 @@ export const config = {
     ? resolve(BOT_DIR, optional("GOOGLE_SA_KEY_PATH")!)
     : undefined,
   sheetId: optional("SHEET_ID"),
+
+  /**
+   * Файл лога событий (SQLite). Путь считается от КОРНЯ ПРОЕКТА, а не от папки бота:
+   * ту же базу читает пульт из своей папки, и в обоих .env должно стоять одно и то же
+   * «data/events.db». Считай мы от папки бота — там пришлось бы писать «../data/…»,
+   * и первая же попытка выровнять два файла настроек сломала бы один из них.
+   *
+   * Не задан — бот работает молча, без лога: терять из-за статистики живые разговоры незачем.
+   */
+  eventsDbPath: optional("EVENTS_DB_PATH")
+    ? resolve(BOT_DIR, "..", optional("EVENTS_DB_PATH")!)
+    : undefined,
+
+  /**
+   * Через сколько минут молчания обращение считается законченным.
+   *
+   * Настройкой, а не числом в коде: по этой же цифре пульт считает брошенные обращения.
+   * Разъедутся — воронка начнёт врать правдоподобно, поэтому бот записывает свою
+   * фактическую цифру в базу (таблица meta), а пульт сверяется именно с ней.
+   */
+  sessionTimeoutMin: positiveNumber("SESSION_TIMEOUT_MIN", 30),
 
   /** Адрес OpenRouter: API совместим с OpenAI, поэтому годится обычный chat/completions. */
   openRouterBaseUrl: "https://openrouter.ai/api/v1",

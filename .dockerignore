@@ -14,6 +14,11 @@ bot_administrator/data
 bot_administrator/.env
 bot_administrator/.env.*
 !bot_administrator/.env.example
+# Лог событий бота: на сервере он лежит рядом с кодом и попал бы в контекст сборки,
+# то есть в слои образа. База — это данные; в образе им не место, а копия в слое
+# ещё и устаревает. Внутрь контейнеров она приходит томом.
+data
+
 docs
 journal
 *.log

@@ -10,11 +10,20 @@
 // и почему разговор оборвался.
 
 import { chat } from "./llm.js";
+import { config } from "./config.js";
+import { moment } from "./date.js";
+import { logEvent, setGist } from "./events.js";
 import { appendRow, connect, updateRow, type Row } from "./sheet.js";
 import type { ToolEvent } from "./agent.js";
 
-/** Через сколько молчания обращение считается законченным. */
-const IDLE_MS = 30 * 60 * 1000;
+/**
+ * Через сколько молчания обращение считается законченным.
+ *
+ * Настройкой, а не числом: по этой же цифре пульт считает брошенные обращения.
+ * Разъедутся — воронка соврёт правдоподобно, поэтому фактическое значение
+ * уезжает в базу событий, и пульт сверяется с ним.
+ */
+const IDLE_MS = config.sessionTimeoutMin * 60 * 1000;
 
 /** Сколько последних реплик храним для разбора. Больше модели и не нужно. */
 const TURNS_KEPT = 20;
@@ -44,6 +53,10 @@ type Session = {
   /** Разговор упёрся в сбой, а не в решение клиента. */
   failed: boolean;
   row: number | null;
+  /** Строка session_start в логе событий — в неё позже дописывается gist. */
+  startEventId: number | null;
+  /** gist уже заказан: одна строка — один поход в модель. */
+  gistAsked: boolean;
   /** Очередь записей в таблицу: две строки на один разговор появиться не должны. */
   writing?: Promise<void>;
   idle?: NodeJS.Timeout;
@@ -51,6 +64,11 @@ type Session = {
 
 const open = new Map<number, Session>();
 let ready = false;
+
+/** Идентификатор текущего обращения чата — нужен тем, кто пишет события со стороны бота. */
+export function sessionIdOf(chatId: number): string | undefined {
+  return open.get(chatId)?.id;
+}
 
 /** Проверяет доступ к таблице при старте. Нет доступа — бот работает как раньше, без журнала. */
 export async function initJournal(): Promise<void> {
@@ -70,6 +88,8 @@ function create(chatId: number, channel: Channel): Session {
     reached: "J1",
     failed: false,
     row: null,
+    startEventId: null,
+    gistAsked: false,
   };
 }
 
@@ -116,16 +136,6 @@ function intentOf(session: Session): string {
   return "вопрос";
 }
 
-/** Дата в виде, который Google Sheets понимает как дату, а человек читает без расшифровки. */
-function moment(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return (
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
-    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-  );
-}
-
 /**
  * Записывает состояние обращения в таблицу: первый раз — новой строкой, дальше — поверх.
  *
@@ -150,6 +160,9 @@ export async function beginTurn(chatId: number, channel: Channel): Promise<void>
   if (!session) {
     session = create(chatId, channel);
     open.set(chatId, session);
+    // Событие пишем до похода в таблицу: SQLite рядом и отвечает мгновенно,
+    // а Google может думать секунду — начало обращения не должно от этого зависеть.
+    session.startEventId = logEvent("session_start", { sessionId: session.id, chatId });
     // Строку заводим сразу: если бот упадёт посреди разговора, обращение всё равно видно.
     await flush(session, false);
   }
@@ -211,6 +224,15 @@ function applyTrace(session: Session, trace: ToolEvent[]): void {
     if (event.name === "create_booking") {
       const booked = result?.booked as Record<string, string> | undefined;
       if (result?.ok === true && booked) {
+        // Целевое действие по role.md: J3 — клиент записан. Пишем один раз,
+        // на переходе, а не на каждом разборе следа.
+        if (session.reached !== "J3") {
+          logEvent("session_success", {
+            sessionId: session.id,
+            chatId: session.chatId,
+            details: "запись создана",
+          });
+        }
         session.reached = "J3";
         session.service = booked.service ?? session.service;
         session.master = booked.master ?? session.master;
@@ -260,6 +282,73 @@ export async function close(chatId: number): Promise<void> {
       (session.breakReason ? `, причина: ${session.breakReason}` : "")
   );
 }
+
+/**
+ * Заказывает у модели короткое «о чём спрашивал» и дописывает его в session_start.
+ *
+ * Вызывается ПОСЛЕ того, как клиент получил ответ, и ничего не ждёт: поход в модель
+ * занимает секунду, и заставлять из-за статистики ждать живого человека нельзя.
+ * Не получилось — строка просто остаётся без gist, бот об этом не спотыкается.
+ *
+ * Отдельного сервиса и ключа не заводим: это тот же OpenRouter, которым бот отвечает.
+ */
+export function describeFirstMessage(chatId: number, question: string): void {
+  const session = open.get(chatId);
+  if (!session || session.startEventId === null || session.gistAsked) return;
+
+  session.gistAsked = true;
+  // Номер строки забираем сразу: пока модель думает, обращение может закрыться.
+  const eventId = session.startEventId;
+
+  void (async () => {
+    try {
+      const reply = await chat([
+        { role: "system", content: GIST_PROMPT },
+        { role: "user", content: question },
+      ]);
+      const gist = scrubGist(reply.content ?? "");
+      if (gist) setGist(eventId, gist);
+    } catch (error) {
+      console.error("[события] gist не получился:", error);
+    }
+  })();
+}
+
+/**
+ * Вычищает из ответа модели то, что похоже на телефон.
+ *
+ * Промпт запрещает модели переносить в gist персональные данные, но промптом это
+ * не гарантируется — а кодом проверяется (тот же приём, что и сверка цитат
+ * в manager/transcribe: «нельзя обещать, зато можно проверить»).
+ *
+ * Телефон здесь — главный риск: клиент диктует его боту дословно, и именно он
+ * чаще всего просится в пересказ. Имя моделью и так отбрасывается, а надёжного
+ * способа поймать его кодом нет — на нём и не настаиваем.
+ */
+const PHONE_LIKE = /\+?\d[\d\s().-]{6,}\d/g;
+
+function scrubGist(raw: string): string {
+  const withoutPhones = raw.replace(PHONE_LIKE, " ");
+  const gist = withoutPhones
+    .replace(/\s+/g, " ")
+    // На месте вырезанного номера остаётся хвост вроде «перезвонить на (» — подчищаем.
+    .replace(/[\s,;:.(«"'-]+$/u, "")
+    .trim()
+    .slice(0, 120);
+  // Сравниваем именно до/после вырезания номера: обрезка хвоста и лимит длины
+  // к персональным данным отношения не имеют, и жаловаться на них незачем.
+  if (withoutPhones !== raw) {
+    console.warn("[события] из gist вычищено похожее на телефон");
+  }
+  // Осталась пара символов — смысла в такой пометке нет, лучше пустая строка.
+  return gist.length >= 3 ? gist : "";
+}
+
+const GIST_PROMPT =
+  "Ты помечаешь обращения в служебном журнале. По сообщению клиента напиши ОДНУ короткую " +
+  "фразу на русском о том, ЧЕГО он хотел: «спрашивал, есть ли парковка», «хотел записаться " +
+  "на маникюр». Не больше восьми слов. Не цитируй сообщение. Никаких имён, телефонов, " +
+  "адресов и дат. В ответе — только сама фраза, без кавычек и пояснений.";
 
 /** Закрывает все открытые обращения — при остановке бота. */
 export async function closeAll(): Promise<void> {

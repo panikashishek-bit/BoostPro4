@@ -18,7 +18,10 @@ import {
   recordFailure,
   recordTurn,
   type Channel,
+  sessionIdOf,
+  describeFirstMessage,
 } from "./session.js";
+import { logEvent, rememberSessionTimeout } from "./events.js";
 
 const bot = new Bot(config.telegramBotToken);
 
@@ -82,12 +85,18 @@ async function answer(
   // владелец увидит в таблице, что клиент приходил.
   await beginTurn(chatId, channel);
 
+  // В details — КАНАЛ, а не текст сообщения: клиент диктует боту имя и телефон,
+  // и сохранять его слова означало бы держать персональные данные в логе.
+  logEvent("message_in", { sessionId: sessionIdOf(chatId) ?? "", chatId, details: channel });
+
   try {
     const { text, trace } = await respond(systemPrompt, getHistory(chatId), question);
     remember(chatId, { role: "user", content: question });
     remember(chatId, { role: "assistant", content: text });
     console.log(`[ответ] ${text.replace(/\n/g, " ").slice(0, 120)}…`);
     await ctx.reply(trim(text));
+    // Клиент уже с ответом — теперь можно и сходить в модель за пометкой для журнала.
+    describeFirstMessage(chatId, question);
     await recordTurn(chatId, question, text, trace);
   } catch (error) {
     // Неудачный обмен в историю не пишем, иначе он будет мешать следующим ответам.
@@ -95,6 +104,7 @@ async function answer(
     const reason =
       error instanceof ServiceError ? error.clientMessage : "Извините, сейчас не могу ответить.";
     await ctx.reply(failureReply(reason));
+    logEvent("error", { sessionId: sessionIdOf(chatId) ?? "", chatId, details: reason });
     await recordFailure(chatId, question);
   }
 }
@@ -179,6 +189,15 @@ async function downloadVoice(ctx: Context): Promise<Buffer> {
 // Молча проглотить нельзя — клиент останется без ответа и решит, что его игнорируют.
 bot.catch(async (err) => {
   console.error(`[ошибка] обновление ${err.ctx.update.update_id}:`, err.error);
+  // Сюда не доходит recordFailure — без этой строки такие сбои в логе не видны вовсе.
+  const chatId = err.ctx.chat?.id;
+  if (chatId !== undefined) {
+    logEvent("error", {
+      sessionId: sessionIdOf(chatId) ?? "",
+      chatId,
+      details: "необработанный сбой",
+    });
+  }
   try {
     await err.ctx.reply(failureReply("Извините, что-то пошло не так."));
   } catch (replyError) {
@@ -203,6 +222,10 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 // Доступ к таблице проверяем на старте: ошибку в ключе или в расшаривании
 // лучше увидеть в логе сейчас, чем на первом клиенте.
 await initJournal();
+
+// Кладём в базу таймаут, с которым бот РЕАЛЬНО режет сессии. Пульт сверяется с этой
+// цифрой: разошлись настройки — он скажет об этом, а не тихо посчитает воронку неверно.
+rememberSessionTimeout(config.sessionTimeoutMin);
 
 const me = await bot.api.getMe();
 console.log(`[старт] бот @${me.username} на связи, модель ${config.model}`);

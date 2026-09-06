@@ -4,6 +4,7 @@ import { dashboardEnvSource } from "./dashboard-env";
 import { eventsLogSource } from "./events-log";
 import { clientsTableSource } from "./clients-table";
 import { transcriptsSource } from "./transcripts";
+import { sessionTimeoutSource } from "./session-timeout";
 
 // Список источников для блока «Проверка связи».
 //
@@ -13,6 +14,7 @@ import { transcriptsSource } from "./transcripts";
 export const SOURCES: HealthSource[] = [
   dashboardEnvSource,
   eventsLogSource,
+  sessionTimeoutSource,
   clientsTableSource,
   transcriptsSource,
 ];

@@ -81,6 +81,8 @@ jobs:
             ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}
             POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
             SHEET_ID=${{ secrets.SHEET_ID }}
+            EVENTS_DB_PATH=data/events.db
+            SESSION_TIMEOUT_MIN=30
             ENVFILE
             chmod 600 .env
 
@@ -120,27 +122,45 @@ jobs:
             # а docker на месте отсутствующего файла создаёт ПАПКУ, и пульт потом
             # не может прочитать свои настройки.
             mkdir -p dashboard
-            if [ -f dashboard/.env ]; then
-              echo "dashboard/.env уже есть — не трогаю"
-            else
+
+            # Папка под лог событий. Создаём ЗДЕСЬ, до compose up: у отсутствующего
+            # источника тома docker делает каталог сам, но от имени root, и бот
+            # внутри контейнера потом не может в него писать.
+            mkdir -p data
+
+            # Дописывает настройку, если её ещё нет. Существующее значение не трогаем:
+            # в файле на сервере лежит то, что владелец правил руками.
+            add_setting() {
+              if grep -q "^$2=" "$1" 2>/dev/null; then
+                echo "  $2 уже есть в $1"
+              else
+                { printf '%s=' "$2"; printf '%s' "$3"; echo; } >> "$1"
+                echo "  $2 добавлен в $1"
+              fi
+            }
+
+            if [ ! -f dashboard/.env ]; then
               # Секрет не заведён — ставим admin. Пустая переменная означала бы,
               # что вход закрыт для всех, включая хозяина: пульт молчал бы на любой пароль.
               : "${DASHBOARD_PASSWORD:=admin}"
-
-              # Пароль пишем printf-ом из переменной, а НЕ строкой внутри heredoc.
-              # Внутри heredoc с неэкранированным словом оболочка разбирает тело:
-              # пароль с $ молча обрезался бы, а с обратными кавычками — выполнился
-              # бы как команда прямо здесь. Рядом, для ключа Google, ровно поэтому
-              # стоит <<'KEYFILE' в кавычках.
+              # Пароль пишем printf-ом из переменной, а НЕ строкой внутри heredoc:
+              # тело heredoc с неэкранированным словом оболочка разбирает, и пароль
+              # с $ молча обрезался бы, а с обратными кавычками — выполнился командой.
               { printf 'DASHBOARD_PASSWORD='; printf '%s' "$DASHBOARD_PASSWORD"; echo; } > dashboard/.env
-              cat >> dashboard/.env <<'DASHENV'
-            EVENTS_DB_PATH=
-            CLIENTS_SHEET_ID=
-            TRANSCRIPTS_DIR=
-            DASHENV
               chmod 600 dashboard/.env
               echo "dashboard/.env создан"
+            else
+              echo "dashboard/.env уже есть — пароль не трогаю"
             fi
+
+            # Остальные настройки дописываем в любом случае. Файл, созданный прошлым
+            # деплоем, новых переменных не знает: без этого пульт не нашёл бы базу
+            # событий, и строка «лог событий» осталась бы серой без всякой причины.
+            add_setting dashboard/.env EVENTS_DB_PATH data/events.db
+            add_setting dashboard/.env SESSION_TIMEOUT_MIN 30
+            add_setting dashboard/.env CLIENTS_SHEET_ID ""
+            add_setting dashboard/.env TRANSCRIPTS_DIR ""
+            chmod 600 dashboard/.env
 
             echo "=== сборка и запуск ==="
             docker compose -f docker-compose.prod.yml up -d --build --remove-orphans

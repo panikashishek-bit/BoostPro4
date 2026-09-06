@@ -117,6 +117,19 @@ function explain(error: unknown): string {
   return `файл не читается (${code ?? "неизвестная причина"})`;
 }
 
+/**
+ * Таймаут сессии, с которым работает ПУЛЬТ. По нему он будет считать брошенные
+ * обращения. У бота своя копия этой цифры в своём .env — их обязан сверять
+ * отдельный источник в «проверке связи», иначе воронка соврёт правдоподобно.
+ */
+export function sessionTimeoutMin(env: DashboardEnv): number {
+  const raw = Number(env.get("SESSION_TIMEOUT_MIN"));
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_SESSION_TIMEOUT_MIN;
+}
+
+/** То же умолчание, что и у бота: разойтись они не должны даже когда переменная не задана. */
+export const DEFAULT_SESSION_TIMEOUT_MIN = 30;
+
 /** Пароль на вход. Пустой — значит вход закрыт, и пульт скажет об этом прямо. */
 export function dashboardPassword(env: DashboardEnv): string {
   return env.get("DASHBOARD_PASSWORD");
