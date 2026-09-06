@@ -226,11 +226,22 @@ function applyTrace(session: Session, trace: ToolEvent[]): void {
       if (result?.ok === true && booked) {
         // Целевое действие по role.md: J3 — клиент записан. Пишем один раз,
         // на переходе, а не на каждом разборе следа.
+        //
+        // В details уходит ID созданной записи, а не просто «запись создана».
+        // Это единственная ниточка от лога напрямую к базе продукта, и нужна она
+        // ровно для одного случая: журнал в Google не записался. Тогда пульт
+        // по этому ID видит, что запись цела, и не поднимает тревогу за клиента,
+        // который на самом деле придёт вовремя.
+        //
+        // ⚠️ Формат строки — договор с пультом (dashboard/counters/reconcile.ts):
+        // «запись создана: <id>». Меняешь здесь — правь и там, иначе сверка
+        // молча перестанет находить записи.
         if (session.reached !== "J3") {
+          const bookingId = booked.bookingId ?? "";
           logEvent("session_success", {
             sessionId: session.id,
             chatId: session.chatId,
-            details: "запись создана",
+            details: bookingId ? `запись создана: ${bookingId}` : "запись создана",
           });
         }
         session.reached = "J3";

@@ -59,13 +59,14 @@ jobs:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           command_timeout: 20m
-          envs: SERVER_PATH,DEPLOY_PATH,DASHBOARD_PASSWORD,SHEET_ID
+          envs: SERVER_PATH,DEPLOY_PATH,DASHBOARD_PASSWORD,SHEET_ID,POSTGRES_PASSWORD
           script: |
             set -e
             cd "$SERVER_PATH"
@@ -185,6 +186,17 @@ jobs:
               add_setting dashboard/.env CLIENTS_SA_KEY ""
             fi
             add_setting dashboard/.env TRANSCRIPTS_DIR ""
+            # База записей — третий источник счётчика «Сверка». Внутри контейнера
+            # хост базы называется db, а не localhost: пульт живёт в контейнере
+            # приложения и ходит по той же внутренней сети compose.
+            #
+            # Строка собирается так же, как DATABASE_URL в docker-compose.prod.yml,
+            # и пароль в неё подставляется тем же способом — если он однажды
+            # окажется небезопасным для URL, сломаются оба места сразу, а не одно.
+            #
+            # Право на запись пульт себе не берёт: к адресу он сам дописывает
+            # default_transaction_read_only=on (dashboard/bookings-db.ts).
+            add_setting dashboard/.env BOOKINGS_DB_URL "postgresql://proservice:${POSTGRES_PASSWORD}@db:5432/proservice"
             chmod 600 dashboard/.env
 
             echo "=== сборка и запуск ==="

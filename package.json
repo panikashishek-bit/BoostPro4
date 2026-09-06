@@ -10,7 +10,9 @@
     "db:push": "prisma db push",
     "db:seed": "prisma db seed",
     "db:reset": "prisma db push --force-reset && prisma db seed",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "demo:seed": "tsx --env-file=.env --env-file=bot_administrator/.env demo/seed.ts",
+    "demo:wipe": "tsx --env-file=.env --env-file=bot_administrator/.env demo/wipe.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

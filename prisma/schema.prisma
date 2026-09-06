@@ -72,7 +72,13 @@ model Booking {
   comment     String?
   createdAt   DateTime      @default(now())
 
+  /// Учебная строка, дорисованная командой npm run demo:seed.
+  /// У настоящих записей всегда false — их не помечает никто и никогда.
+  /// По этому полю и только по нему npm run demo:wipe находит, что стирать.
+  isDemo      Boolean       @default(false)
+
   @@index([masterId, startAt])
+  @@index([isDemo])
 }
 
 enum BookingStatus {

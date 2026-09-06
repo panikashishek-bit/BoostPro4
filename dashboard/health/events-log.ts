@@ -21,11 +21,16 @@ export const eventsLogSource: HealthSource = {
 
     try {
       const stats = opened.db
-        .prepare("SELECT COUNT(*) AS total, MAX(ts) AS last FROM events")
-        .get() as { total?: number; last?: string | null } | undefined;
+        .prepare(
+          `SELECT COUNT(*) AS total, MAX(ts) AS last,
+                  COUNT(CASE WHEN is_demo <> '' THEN 1 END) AS demo
+           FROM events`
+        )
+        .get() as { total?: number; last?: string | null; demo?: number } | undefined;
 
       const total = Number(stats?.total ?? 0);
       const last = stats?.last ?? null;
+      const demo = Number(stats?.demo ?? 0);
 
       if (total === 0) {
         return {
@@ -34,9 +39,13 @@ export const eventsLogSource: HealthSource = {
         };
       }
 
+      // Про учебные строки говорим прямо здесь же. «1116 событий» без оговорки —
+      // ровно то враньё, от которого эта строка должна защищать.
+      const drawn = demo > 0 ? `, из них ${demo} учебных (npm run demo:wipe сотрёт)` : "";
+
       return {
         state: "ok",
-        detail: `база найдена: ${total} ${plural(total, "событие", "события", "событий")}, последнее ${last}`,
+        detail: `база найдена: ${total} ${plural(total, "событие", "события", "событий")}${drawn}, последнее ${last}`,
       };
     } catch (error) {
       // Файл есть, но таблицы в нём нет — обычно это чужой .db или база, которую

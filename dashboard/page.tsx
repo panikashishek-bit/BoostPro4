@@ -2,14 +2,15 @@ import {
   readDashboardEnv,
   dashboardPassword,
   DEFAULT_PASSWORD,
-  DASHBOARD_PATH,
   type DashboardEnv,
 } from "./config";
 import { resolvePeriod, PERIODS, type Period, type PeriodKey } from "./period";
+import { countDemo, dashboardHref, resolveDemo, type Demo } from "./demo";
 import { DayChart } from "./day-chart";
 import type { Counter } from "./counters/types";
 import { isAuthed } from "./auth";
 import { login, logout } from "./actions";
+import { plural } from "./plural";
 import { runHealthChecks, type CheckedSource } from "./health/registry";
 import { collectCounters, COUNTERS, type CollectedCounter } from "./counters/registry";
 import type { HealthState } from "./health/types";
@@ -36,13 +37,21 @@ export default async function DashboardPage({
     return <LoginScreen env={env} />;
   }
 
-  const period = resolvePeriod((await searchParams)?.period);
+  const query = await searchParams;
+  const period = resolvePeriod(query?.period);
+  const demo = resolveDemo(query?.demo);
 
   // Проверки и счётчики независимы — считаем их разом, а не по очереди.
   const [checks, counters] = await Promise.all([
     runHealthChecks(env),
-    collectCounters({ env, period }),
+    collectCounters({ env, period, demo }),
   ]);
+
+  // Сколько учебного попало в цифры. Считается ВСЕГДА, даже когда показ демо
+  // выключен: тогда плашка говорит не «в цифрах есть выдумка», а «выдумка
+  // спрятана» — и это тоже надо сказать, иначе человек не поймёт, куда делся
+  // месяц истории.
+  const drawn = countDemo(env, period);
 
   return (
     <div className="space-y-10">
@@ -60,8 +69,10 @@ export default async function DashboardPage({
         </form>
       </header>
 
+      <DemoBanner drawn={drawn} period={period} demo={demo} />
+
       <ConnectionCheck env={env} checks={checks} />
-      <CommandCentre counters={counters} period={period} />
+      <CommandCentre counters={counters} period={period} demo={demo} />
     </div>
   );
 }
@@ -175,7 +186,59 @@ function ConnectionCheck({ env, checks }: { env: DashboardEnv; checks: CheckedSo
 
 // --- Командный центр ---
 
-function CommandCentre({ counters, period }: { counters: CollectedCounter[]; period: Period }) {
+/**
+ * Плашка про учебные строки.
+ *
+ * Стоит в шапке, а не под счётчиками, и висит, пока учебное в периоде есть.
+ * Правило простое: пульт, показавший дорисованную историю молча, — это пульт,
+ * которому больше нельзя верить ни в чём. Один раз обмануться на своих же
+ * цифрах дороже, чем каждый день видеть эту строку.
+ */
+function DemoBanner({
+  drawn,
+  period,
+  demo,
+}: {
+  drawn: { sessions: number; events: number } | null;
+  period: Period;
+  demo: Demo;
+}) {
+  if (!drawn || drawn.sessions === 0) return null;
+
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-amber-500/40 bg-amber-500/5 px-3 py-2.5 text-xs text-ink">
+      <span aria-hidden>⚠</span>
+      {demo.show ? (
+        <span>
+          Включая {drawn.sessions}{" "}
+          {plural(drawn.sessions, "учебное обращение", "учебных обращения", "учебных обращений")} (
+          {drawn.events} {plural(drawn.events, "строка", "строки", "строк")} в логе) — это не
+          настоящие данные.
+        </span>
+      ) : (
+        <span>
+          Учебные строки скрыты: {drawn.sessions}{" "}
+          {plural(drawn.sessions, "обращение", "обращения", "обращений")} за этот период не
+          показаны. Здесь только настоящее.
+        </span>
+      )}
+      <a href={dashboardHref(period.key, { show: !demo.show })} className="text-brand underline">
+        {demo.show ? "показать только настоящее" : "вернуть учебные"}
+      </a>
+      <span className="text-muted">стереть насовсем: npm run demo:wipe</span>
+    </p>
+  );
+}
+
+function CommandCentre({
+  counters,
+  period,
+  demo,
+}: {
+  counters: CollectedCounter[];
+  period: Period;
+  demo: Demo;
+}) {
   return (
     <section className="space-y-4">
       {/* Переключатель периода стоит ОДНОЙ строкой над всеми счётчиками, а не внутри
@@ -183,7 +246,10 @@ function CommandCentre({ counters, period }: { counters: CollectedCounter[]; per
           за другой период, и сравнивать их уже нельзя. */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-lg font-semibold text-ink">Мой командный центр</h2>
-        <PeriodSwitch active={period.key} />
+        <div className="flex flex-wrap items-center gap-2">
+          <DemoSwitch period={period} demo={demo} />
+          <PeriodSwitch active={period.key} demo={demo} />
+        </div>
       </div>
 
       {COUNTERS.length === 0 ? (
@@ -214,10 +280,16 @@ function CommandCentre({ counters, period }: { counters: CollectedCounter[]; per
                       ширина знаков делает короткое число рыхлым. */}
                   <p className="mt-1 text-3xl font-bold tracking-tight text-ink">{value.value}</p>
                   {value.caption && <p className="mt-0.5 text-sm text-muted">{value.caption}</p>}
+                  {value.figures?.length ? <Figures figures={value.figures} /> : null}
                   {value.notes?.length ? <Notes notes={value.notes} /> : null}
+                  {value.cases?.length ? <Cases cases={value.cases} /> : null}
                   {value.chart && (
                     <div className="mt-5">
-                      <DayChart title={value.chart.title} days={value.chart.days} />
+                      <DayChart
+                        title={value.chart.title}
+                        days={value.chart.days}
+                        realFrom={value.chart.realFrom}
+                      />
                     </div>
                   )}
                 </>
@@ -238,13 +310,15 @@ function CommandCentre({ counters, period }: { counters: CollectedCounter[]; per
 
 // --- Период, сигналы и пояснение ---
 
-function PeriodSwitch({ active }: { active: PeriodKey }) {
+function PeriodSwitch({ active, demo }: { active: PeriodKey; demo: Demo }) {
   return (
     <nav aria-label="Период" className="flex gap-1 rounded-xl border border-line bg-surface p-1">
       {PERIODS.map((p) => (
         <a
           key={p.key}
-          href={`${DASHBOARD_PATH}?period=${p.key}`}
+          // Ссылка несёт ОБА переключателя: иначе смена периода молча включала бы
+          // учебные строки обратно, и человек смотрел бы не на то, что выбрал.
+          href={dashboardHref(p.key, demo)}
           aria-current={p.key === active ? "page" : undefined}
           className={`inline-flex min-h-11 items-center rounded-lg px-3 text-sm transition ${
             p.key === active
@@ -256,6 +330,113 @@ function PeriodSwitch({ active }: { active: PeriodKey }) {
         </a>
       ))}
     </nav>
+  );
+}
+
+/**
+ * Переключатель «показывать демо».
+ *
+ * Обычная ссылка с состоянием в адресе, как и период: страница собирается
+ * на сервере на каждый запрос, клиентский код тут не нужен.
+ */
+function DemoSwitch({ period, demo }: { period: Period; demo: Demo }) {
+  return (
+    <a
+      href={dashboardHref(period.key, { show: !demo.show })}
+      aria-pressed={demo.show}
+      className={`inline-flex min-h-11 items-center gap-2 rounded-xl border border-line px-3 text-sm transition ${
+        demo.show ? "bg-brand-soft text-brand" : "bg-surface text-muted hover:text-ink"
+      }`}
+    >
+      <span
+        aria-hidden
+        className={`inline-block size-2 rounded-full ${demo.show ? "bg-brand" : "bg-line ring-1 ring-muted/40"}`}
+      />
+      показывать демо
+    </a>
+  );
+}
+
+/**
+ * Несколько чисел в ряд.
+ *
+ * Стоят рядом и одинаковым кеглем нарочно: смысл в их сравнении, и стоит
+ * выделить одно — глаз начнёт считать его главным, а главного среди них нет.
+ */
+function Figures({ figures }: { figures: NonNullable<CollectedCounter["value"]>["figures"] }) {
+  return (
+    <dl className="mt-4 flex flex-wrap gap-x-6 gap-y-2">
+      {figures?.map((figure) => (
+        <div key={figure.label}>
+          <dt className="text-xs text-muted">{figure.label}</dt>
+          <dd className="text-lg font-semibold text-ink">{figure.value}</dd>
+          {figure.note && <dd className="text-[11px] text-muted">{figure.note}</dd>}
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/**
+ * Список случаев к разбору.
+ *
+ * Тревожные видно сразу, спокойные — тоже здесь, но тише: разница между
+ * «человек придёт к закрытой двери» и «в журнал не попало» слишком велика,
+ * чтобы показывать их одинаково. Смысл несёт текст, цвет только подчёркивает.
+ *
+ * Первые пять открыты, остальные — под «показать все»: список на сотню строк
+ * никто не читает, а первые пять читают всегда.
+ */
+function Cases({ cases }: { cases: NonNullable<CollectedCounter["value"]>["cases"] }) {
+  const all = cases ?? [];
+  const head = all.slice(0, 5);
+  const rest = all.slice(5);
+
+  return (
+    <div className="mt-4 space-y-2">
+      <ul className="space-y-2">
+        {head.map((one) => (
+          <CaseRow key={one.id} one={one} />
+        ))}
+      </ul>
+
+      {rest.length > 0 && (
+        <details>
+          <summary className="inline-flex min-h-11 cursor-pointer items-center text-xs text-brand">
+            Показать остальные {rest.length}
+          </summary>
+          <ul className="mt-2 space-y-2">
+            {rest.map((one) => (
+              <CaseRow key={one.id} one={one} />
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function CaseRow({ one }: { one: NonNullable<NonNullable<CollectedCounter["value"]>["cases"]>[number] }) {
+  return (
+    <li
+      className={`rounded-xl border px-3 py-2.5 text-xs ${
+        one.tone === "alarm" ? "border-amber-500/40 bg-amber-500/5" : "border-line bg-surface"
+      }`}
+    >
+      <p className="flex flex-wrap items-center gap-x-2 text-ink">
+        <span aria-hidden className={one.tone === "alarm" ? "text-amber-600" : "text-muted"}>
+          {one.tone === "alarm" ? "⚠" : "·"}
+        </span>
+        <span className="font-medium">{one.title}</span>
+        {one.demo && (
+          <span className="rounded-md border border-line px-1.5 py-0.5 text-[10px] text-muted">
+            учебная строка
+          </span>
+        )}
+      </p>
+      <p className="mt-1 text-muted">{one.detail}</p>
+      {one.gist && <p className="mt-0.5 text-muted">Спрашивал: {one.gist}</p>}
+    </li>
   );
 }
 

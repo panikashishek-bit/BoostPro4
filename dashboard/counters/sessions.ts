@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { demoFilter, realBoundary, type Demo } from "../demo";
 import { openEventsDb } from "../events-db";
 import { lastDayBoundary } from "../period";
 import { plural } from "../plural";
@@ -29,6 +30,9 @@ export const sessionsCounter: Counter = {
       "обратиться несколько раз, поэтому людей всегда не больше, чем обращений.",
     "График: по одному столбику на день. Дни, когда никто не написал, показаны нулём, " +
       "а не пропущены — иначе провал выглядел бы как ровный ряд и график врал бы.",
+    "Пунктирная черта на графике — граница учебного и настоящего: левее неё столбики " +
+      "дорисованы командой npm run demo:seed, правее стоят только твои собственные данные. " +
+      "Переключатель «показывать демо» в шапке убирает учебное из всех цифр разом.",
     "Если сложить столбики, может получиться больше крупной цифры — это не ошибка. "  +
       "Разговор, начатый до полуночи и продолженный после, виден в обоих днях, но обращение " +
       "при этом одно.",
@@ -39,16 +43,21 @@ export const sessionsCounter: Counter = {
       "это выводы на трёх точках. Цифра показана, но доверять её форме рано.",
   ],
 
-  async collect({ env, period }) {
+  async collect({ env, period, demo }) {
     const opened = openEventsDb(env);
     // Базы нет — пусть карточка скажет «нет данных» с этой причиной. Реестр ловит.
     if (!opened.ok) throw new Error(opened.problem);
 
     try {
+      // Учебные строки либо участвуют во всех запросах карточки, либо ни в одном:
+      // цифра из одного набора строк и график из другого — это не «подробность»,
+      // а разные данные под одним заголовком.
+      const onlyReal = demoFilter(demo);
+
       const totals = opened.db
         .prepare(
           `SELECT COUNT(DISTINCT session_id) AS sessions, COUNT(DISTINCT chat_id) AS people
-           FROM events WHERE ts >= ?`
+           FROM events WHERE ts >= ?${onlyReal}`
         )
         .get(period.since) as { sessions?: number; people?: number } | undefined;
 
@@ -60,7 +69,7 @@ export const sessionsCounter: Counter = {
       const byDay = opened.db
         .prepare(
           `SELECT substr(ts, 1, 10) AS day, COUNT(DISTINCT session_id) AS n
-           FROM events WHERE ts >= ? GROUP BY day`
+           FROM events WHERE ts >= ?${onlyReal} GROUP BY day`
         )
         .all(period.since) as { day: string; n: number }[];
 
@@ -75,8 +84,14 @@ export const sessionsCounter: Counter = {
       return {
         value: String(sessions),
         caption: `${people} ${plural(people, "человек", "человека", "человек")}`,
-        chart: { title: `Обращения по дням, ${period.label}`, days },
-        notes: signals(opened.db, sessions),
+        chart: {
+          title: `Обращения по дням, ${period.label}`,
+          days,
+          // Отбивать границу есть смысл, только пока учебное в цифрах есть.
+          // Выключил показ демо — и весь график настоящий, черта лишняя.
+          realFrom: demo.show ? realBoundary(opened.db, period.since) : undefined,
+        },
+        notes: signals(opened.db, sessions, demo),
       };
     } finally {
       opened.db.close();
@@ -91,15 +106,16 @@ export const sessionsCounter: Counter = {
  * «жив ли бот прямо сейчас», и он не должен зависеть от того, какую кнопку
  * наверху нажали.
  */
-function signals(db: DatabaseSync, sessions: number): CounterNote[] {
+function signals(db: DatabaseSync, sessions: number, demo: Demo): CounterNote[] {
   const notes: CounterNote[] = [];
   const boundary = lastDayBoundary();
+  const onlyReal = demoFilter(demo);
 
   const recent = Number(
-    (db.prepare("SELECT COUNT(*) AS n FROM events WHERE ts >= ?").get(boundary) as { n: number }).n
+    (db.prepare(`SELECT COUNT(*) AS n FROM events WHERE ts >= ?${onlyReal}`).get(boundary) as { n: number }).n
   );
   const earlier = Number(
-    (db.prepare("SELECT COUNT(*) AS n FROM events WHERE ts < ?").get(boundary) as { n: number }).n
+    (db.prepare(`SELECT COUNT(*) AS n FROM events WHERE ts < ?${onlyReal}`).get(boundary) as { n: number }).n
   );
 
   if (recent === 0 && earlier > 0) {

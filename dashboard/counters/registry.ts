@@ -1,10 +1,9 @@
 import type { Counter, CounterContext, CounterValue } from "./types";
+import { funnelCounter } from "./funnel";
+import { reconcileCounter } from "./reconcile";
 import { sessionsCounter } from "./sessions";
 
 // Список счётчиков командного центра.
-//
-// Пока пуст — данных ещё нет, и пульт честно показывает пустое место
-// вместо выдуманных цифр.
 //
 // Чтобы добавить счётчик:
 //   1. создай рядом файл, например bookings-week.ts;
@@ -14,7 +13,7 @@ import { sessionsCounter } from "./sessions";
 //
 // Порядок в списке — порядок карточек на странице.
 
-export const COUNTERS: Counter[] = [sessionsCounter];
+export const COUNTERS: Counter[] = [sessionsCounter, funnelCounter, reconcileCounter];
 
 export type CollectedCounter = {
   counter: Counter;

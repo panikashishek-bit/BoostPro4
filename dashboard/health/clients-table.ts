@@ -16,6 +16,10 @@ const SHEET_VARIABLE = "CLIENTS_SHEET_ID";
 
 const CREATED_AT_COLUMN = "Начало";
 
+/** Колонку заводит npm run demo:seed. Её нет — значит и учебных строк нет. */
+const DEMO_COLUMN = "Демо";
+const DEMO_VALUE = "да";
+
 export const clientsTableSource: HealthSource = {
   id: "clients-table",
   title: "таблица клиентов",
@@ -45,11 +49,20 @@ export const clientsTableSource: HealthSource = {
         return { state: "ok", detail: "таблица на связи, обращений в ней пока нет" };
       }
 
+      // Учебные строки называем вслух: без этого «205 обращений» выглядит
+      // как двести настоящих клиентов, которых на самом деле девять.
+      const demoAt = headers.indexOf(DEMO_COLUMN);
+      const demo =
+        demoAt === -1
+          ? 0
+          : rows.filter((row) => String(row[demoAt] ?? "").trim().toLowerCase() === DEMO_VALUE).length;
+      const drawn = demo > 0 ? `, из них ${demo} учебных (npm run demo:wipe сотрёт)` : "";
+
       const at = headers.indexOf(CREATED_AT_COLUMN);
       if (at === -1) {
         return {
           state: "ok",
-          detail: `таблица на связи: ${rows.length} ${plural(rows.length, "обращение", "обращения", "обращений")}; колонки «${CREATED_AT_COLUMN}» в шапке нет`,
+          detail: `таблица на связи: ${rows.length} ${plural(rows.length, "обращение", "обращения", "обращений")}${drawn}; колонки «${CREATED_AT_COLUMN}» в шапке нет`,
         };
       }
 
@@ -61,7 +74,7 @@ export const clientsTableSource: HealthSource = {
 
       return {
         state: "ok",
-        detail: `таблица на связи: ${rows.length} ${plural(rows.length, "обращение", "обращения", "обращений")}, последнее ${last || "без даты"}`,
+        detail: `таблица на связи: ${rows.length} ${plural(rows.length, "обращение", "обращения", "обращений")}${drawn}, последнее ${last || "без даты"}`,
       };
     } catch (error) {
       // Google недоступен или ключ протух — это «настроено, но не читается»,
