@@ -2,7 +2,7 @@ import { bookingsByIds, bookingsCreatedIn, openBookingsDb, type BookingRow } fro
 import { demoFilter, type Demo } from "../demo";
 import { openEventsDb } from "../events-db";
 import { plural } from "../plural";
-import { readRange, readSheetKey } from "../sheets";
+import { readClientsTable } from "../sheets";
 import type { Period } from "../period";
 import type { DashboardEnv } from "../config";
 import type { Counter, CounterCase, CounterFigure, CounterNote, CounterValue } from "./types";
@@ -21,8 +21,6 @@ import type { Counter, CounterCase, CounterFigure, CounterNote, CounterValue } f
 // в строке лежит «ID записи», который выдало приложение, — по нему проверяется
 // сама запись. Допуск по времени тут был бы шагом назад: он умеет ошибаться,
 // а точный ключ — нет.
-
-const SHEET_VARIABLE = "CLIENTS_SHEET_ID";
 
 /** Колонки таблицы, которые нужны сверке. Остальные не читаем и не трогаем. */
 const COLUMN = {
@@ -70,6 +68,10 @@ export const reconcileCounter: Counter = {
       "люди: иди и звони каждому из списка.",
     "Оговорка «в журнал не попало»: запись в базе ЕСТЬ, а строки в таблице нет. Клиент придёт " +
       "вовремя, бежать никуда не надо — сломался журнал в Google, а не запись.",
+    "Строка «не сверить»: один из источников не ответил, и подтвердить записи нечем. " +
+      "Это НЕ значит, что клиенты потеряны — молчание Google или базы это молчание источника, " +
+      "а не отсутствие записи. Пока источник не отвечает, счётчик честно говорит «не сверить» " +
+      "и никого в список не заносит.",
     "Учебные строки в списке помечены. Они дорисованы командой npm run demo:seed, реальных " +
       "людей за ними нет, и тревожиться на них не надо.",
   ],
@@ -150,50 +152,48 @@ type Journal = { rows: Map<string, JournalRow>; booked: number; problem?: string
 async function readJournal(env: DashboardEnv, period: Period, demo: Demo): Promise<Journal> {
   const empty: Journal = { rows: new Map(), booked: 0 };
 
-  const sheetId = env.get(SHEET_VARIABLE);
-  if (!sheetId) return { ...empty, problem: `${SHEET_VARIABLE} не задан в dashboard/.env` };
+  // Диапазон без верхней границы: Google отдаёт только заполненные строки,
+  // а зашитый потолок однажды молча обрезал бы журнал на самом интересном.
+  const table = await readClientsTable(env, "A:R");
+  if ("problem" in table) return { ...empty, problem: table.problem };
 
-  const key = readSheetKey(env);
-  if ("problem" in key) return { ...empty, problem: key.problem };
-
-  try {
-    // Диапазон без верхней границы: Google отдаёт только заполненные строки,
-    // а зашитый потолок однажды молча обрезал бы журнал на самом интересном.
-    const values = await readRange(key.account, sheetId, "A:R");
-    if (values.length === 0) return { ...empty, problem: "таблица пустая — нет даже шапки" };
-
-    const headers = values[0].map((cell) => String(cell).trim());
-    const at = (name: string) => headers.indexOf(name);
-    const session = at(COLUMN.session);
-    if (session === -1) {
-      return { ...empty, problem: `в шапке нет колонки «${COLUMN.session}» — сверять не с чем` };
-    }
-
-    const rows = new Map<string, JournalRow>();
-    let booked = 0;
-
-    for (const cells of values.slice(1)) {
-      const id = String(cells[session] ?? "").trim();
-      if (!id) continue;
-
-      const row: JournalRow = {
-        outcome: String(cells[at(COLUMN.outcome)] ?? "").trim(),
-        bookingId: String(cells[at(COLUMN.bookingId)] ?? "").trim(),
-        demo: String(cells[at(COLUMN.demo)] ?? "").trim().toLowerCase() === "да",
-        createdAt: String(cells[at(COLUMN.createdAt)] ?? "").trim(),
-      };
-      if (!demo.show && row.demo) continue;
-
-      rows.set(id, row);
-      // «Начало» записано как «ГГГГ-ММ-ДД ЧЧ:ММ:СС» — в этом виде дата
-      // сравнивается как обычный текст, разбирать её не нужно.
-      if (row.outcome === BOOKED && row.createdAt >= period.since) booked += 1;
-    }
-
-    return { rows, booked };
-  } catch (error) {
-    return { ...empty, problem: (error as Error)?.message ?? "таблица не читается" };
+  // Нет колонки — сверять НЕЧЕМ, и это беда журнала, а не клиентов. Скажи мы
+  // «ID записи не проставлен» по каждой строке, владелец получил бы сотню
+  // ложных тревог вместо одной честной строки «журнал к сверке не готов».
+  const missing = [COLUMN.session, COLUMN.outcome, COLUMN.bookingId, COLUMN.createdAt].filter(
+    (name) => table.at(name) === -1
+  );
+  if (missing.length > 0) {
+    return {
+      ...empty,
+      problem: `в шапке нет ${missing.map((name) => `«${name}»`).join(", ")} — сверять нечем`,
+    };
   }
+
+  const session = table.at(COLUMN.session);
+  const rows = new Map<string, JournalRow>();
+  let booked = 0;
+
+  for (const cells of table.rows) {
+    const id = String(cells[session] ?? "").trim();
+    if (!id) continue;
+
+    const row: JournalRow = {
+      outcome: String(cells[table.at(COLUMN.outcome)] ?? "").trim(),
+      bookingId: String(cells[table.at(COLUMN.bookingId)] ?? "").trim(),
+      // Колонки «Демо» может не быть вовсе — тогда учебных строк в таблице нет.
+      demo: String(cells[table.at(COLUMN.demo)] ?? "").trim().toLowerCase() === "да",
+      createdAt: String(cells[table.at(COLUMN.createdAt)] ?? "").trim(),
+    };
+    if (!demo.show && row.demo) continue;
+
+    rows.set(id, row);
+    // «Начало» записано как «ГГГГ-ММ-ДД ЧЧ:ММ:СС» — в этом виде дата
+    // сравнивается как обычный текст, разбирать её не нужно.
+    if (row.outcome === BOOKED && row.createdAt >= period.since) booked += 1;
+  }
+
+  return { rows, booked };
 }
 
 // --- Источник 3: база записей приложения ---
@@ -212,11 +212,8 @@ async function readDatabase(
   const opened = openBookingsDb(env);
   if (!opened.ok) return { ...empty, problem: opened.problem };
 
-  // Проверяем ровно те записи, которые бот назвал своими: сначала ID из лога,
-  // если он там есть, иначе ID из строки журнала. Лишнего из базы не тянем.
-  const ids = successes
-    .map((success) => success.bookingId ?? journal.rows.get(success.sessionId)?.bookingId ?? "")
-    .filter(Boolean);
+  // Проверяем ровно те записи, которые бот назвал своими. Лишнего не тянем.
+  const ids = successes.map((success) => bookingIdOf(success, journal)).filter(Boolean);
 
   try {
     const since = new Date(`${period.dates[0]}T00:00:00`);
@@ -237,71 +234,116 @@ async function readDatabase(
   }
 }
 
+/**
+ * Какую запись бот назвал своей: сначала ID из лога, если он там есть, иначе —
+ * из строки журнала.
+ *
+ * Одной функцией, а не двумя копиями правила: по нему и запрашиваются записи
+ * из базы, и раскладываются случаи. Разъедься копии — счётчик запрашивал бы
+ * одни записи, а судил о других, и заметить это было бы нечем.
+ */
+function bookingIdOf(success: Success, journal: Journal): string {
+  return success.bookingId ?? journal.rows.get(success.sessionId)?.bookingId ?? "";
+}
+
 // --- Сборка ответа ---
 
-function build(successes: Success[], journal: Journal, database: Database, demo: Demo): CounterValue {
-  const cases: CounterCase[] = [];
-  let confirmed = 0;
+/**
+ * Что удалось выяснить про одно обращение.
+ *
+ * checked — сумели ли мы вообще проверить: недоступный источник это НЕ потерянная
+ * запись, и объявлять клиента потерянным из-за молчания Google было бы худшим,
+ * что может сделать этот счётчик. Один такой случай — и списку перестанут верить.
+ */
+type Verdict = { checked: boolean; confirmed: boolean; entry: CounterCase | null };
 
-  for (const success of successes) {
-    const row = journal.rows.get(success.sessionId);
-    const bookingId = success.bookingId ?? row?.bookingId ?? "";
-    const booking = bookingId ? database.found.get(bookingId) : undefined;
-    const when = human(success.ts);
-    const base = {
-      id: success.sessionId,
-      title: `чат ${success.chatId} · ${when}`,
-      gist: success.gist || undefined,
-      demo: success.demo || undefined,
-    };
+/** Раскладывает одно обращение по полочкам. Ничего не считает и не форматирует. */
+function classify(success: Success, journal: Journal, database: Database): Verdict {
+  const unchecked: Verdict = { checked: false, confirmed: false, entry: null };
 
-    // Базы нет — проверить нечем, и врать про «потеряны» мы не станем:
-    // отсутствие данных это не отсутствие записи.
-    if (database.problem && !row) continue;
+  // База молчит — существование записи подтвердить нечем ни для кого.
+  if (database.problem) return unchecked;
 
-    if (booking) {
-      confirmed += 1;
-      if (booking.status === "CANCELLED") {
-        cases.push({ ...base, tone: "quiet", detail: "запись создана, но потом отменена" });
-      } else if (!row) {
-        cases.push({
+  const row = journal.rows.get(success.sessionId);
+  const bookingId = bookingIdOf(success, journal);
+
+  // ID нет ни в логе (старая строка), ни в журнале, потому что журнал не прочитан.
+  // Это тоже «не смогли проверить», а не «следов нет».
+  if (!bookingId && journal.problem) return unchecked;
+
+  const base = {
+    id: success.sessionId,
+    title: `чат ${success.chatId} · ${human(success.ts)}`,
+    gist: success.gist || undefined,
+    demo: success.demo || undefined,
+  };
+
+  const booking = bookingId ? database.found.get(bookingId) : undefined;
+
+  if (booking) {
+    const checked = { checked: true, confirmed: true };
+    if (booking.status === "CANCELLED") {
+      return { ...checked, entry: { ...base, tone: "quiet", detail: "запись создана, но потом отменена" } };
+    }
+    if (!row) {
+      return {
+        ...checked,
+        entry: {
           ...base,
           tone: "quiet",
           detail: "запись в базе есть, а строки в журнале нет — клиент придёт, сломался журнал",
-        });
-      } else if (row.outcome !== BOOKED) {
-        cases.push({
+        },
+      };
+    }
+    if (row.outcome !== BOOKED) {
+      return {
+        ...checked,
+        entry: {
           ...base,
           tone: "quiet",
           detail: `запись в базе есть, а в журнале итог «${row.outcome || "пусто"}»`,
-        });
-      }
-      continue;
+        },
+      };
     }
+    return { ...checked, entry: null };
+  }
 
-    if (bookingId) {
-      cases.push({
-        ...base,
-        tone: "alarm",
-        detail: `бот назвал запись ${bookingId}, но такой записи в базе нет`,
-      });
-    } else if (row?.outcome === BOOKED) {
-      cases.push({
+  const lost = { checked: true, confirmed: false };
+
+  if (bookingId) {
+    return {
+      ...lost,
+      entry: { ...base, tone: "alarm", detail: `бот назвал запись ${bookingId}, но такой записи в базе нет` },
+    };
+  }
+  if (row?.outcome === BOOKED) {
+    return {
+      ...lost,
+      entry: {
         ...base,
         tone: "alarm",
         detail: "в журнале «записался», но ID записи не проставлен — подтвердить нечем",
-      });
-    } else {
-      cases.push({
-        ...base,
-        tone: "alarm",
-        detail: "следов нет: ни строки в журнале, ни записи в базе",
-      });
-    }
+      },
+    };
   }
+  return {
+    ...lost,
+    entry: { ...base, tone: "alarm", detail: "следов нет: ни строки в журнале, ни записи в базе" },
+  };
+}
 
-  const lost = cases.filter((one) => one.tone === "alarm").length;
+function build(successes: Success[], journal: Journal, database: Database, demo: Demo): CounterValue {
+  const verdicts = successes.map((success) => classify(success, journal, database));
+
   const said = successes.length;
+  const checked = verdicts.filter((verdict) => verdict.checked).length;
+  const confirmed = verdicts.filter((verdict) => verdict.confirmed).length;
+  // Сначала тревожные: список нужен, чтобы идти звонить, а не читать сверху вниз.
+  const cases = verdicts
+    .map((verdict) => verdict.entry)
+    .filter((entry): entry is CounterCase => entry !== null)
+    .sort((a, b) => (a.tone === b.tone ? 0 : a.tone === "alarm" ? -1 : 1));
+  const lost = cases.filter((one) => one.tone === "alarm").length;
 
   const figures: CounterFigure[] = [
     { label: "бот доложил", value: String(said) },
@@ -318,22 +360,50 @@ function build(successes: Success[], journal: Journal, database: Database, demo:
   ];
 
   return {
-    value: said === 0 ? "—" : lost > 0 ? `${lost} ${plural(lost, "потерян", "потеряны", "потеряны")}` : "сходится",
-    caption:
-      said === 0
-        ? "бот не подтверждал записей за этот период"
-        : lost > 0
-          ? `Бот подтвердил ${said} ${plural(said, "запись", "записи", "записей")}, реально есть ${confirmed}. ` +
-            `Разница — ${lost} ${plural(lost, "человек думает", "человека думают", "человек думают")}, что записаны, а их нет`
-          : `все ${said} ${plural(said, "запись на месте", "записи на месте", "записей на месте")}`,
+    value: value(said, checked, lost),
+    caption: caption(said, checked, confirmed, lost),
     figures,
-    notes: signals(journal, database, said, demo),
-    // Сначала тревожные: список нужен, чтобы идти звонить, а не читать сверху вниз.
-    cases: [...cases].sort((a, b) => (a.tone === b.tone ? 0 : a.tone === "alarm" ? -1 : 1)),
+    notes: signals(journal, database, said, checked, demo),
+    cases,
   };
 }
 
-function signals(journal: Journal, database: Database, said: number, demo: Demo): CounterNote[] {
+/**
+ * Крупная строка на карточке.
+ *
+ * «Не сверить» — отдельное состояние, а не «сходится». Счётчик, который при
+ * недоступном источнике показывает зелёное «сходится», врёт ровно в тот момент,
+ * когда на него смотрят.
+ */
+function value(said: number, checked: number, lost: number): string {
+  if (said === 0) return "—";
+  if (lost > 0) return `${lost} ${plural(lost, "потерян", "потеряны", "потеряны")}`;
+  if (checked < said) return "не сверить";
+  return "сходится";
+}
+
+function caption(said: number, checked: number, confirmed: number, lost: number): string {
+  if (said === 0) return "бот не подтверждал записей за этот период";
+  if (lost > 0) {
+    return (
+      `Бот подтвердил ${said} ${plural(said, "запись", "записи", "записей")}, реально есть ${confirmed}. ` +
+      `Разница — ${lost} ${plural(lost, "человек думает", "человека думают", "человек думают")}, ` +
+      "что записаны, а их нет"
+    );
+  }
+  if (checked < said) {
+    return `проверить удалось ${checked} из ${said} — источник не отвечает, и молчание источника это не потеря записи`;
+  }
+  return `все ${said} ${plural(said, "запись на месте", "записи на месте", "записей на месте")}`;
+}
+
+function signals(
+  journal: Journal,
+  database: Database,
+  said: number,
+  checked: number,
+  demo: Demo
+): CounterNote[] {
   const notes: CounterNote[] = [];
 
   if (journal.problem) {
@@ -351,6 +421,13 @@ function signals(journal: Journal, database: Database, said: number, demo: Demo)
     notes.push({
       tone: "quiet",
       text: `в базе на ${extra} ${plural(extra, "запись", "записи", "записей")} больше, чем бот доложил — сделаны не через бота или до появления лога`,
+    });
+  }
+
+  if (said > 0 && checked < said && !journal.problem && !database.problem) {
+    notes.push({
+      tone: "quiet",
+      text: `проверить удалось ${checked} из ${said} обращений`,
     });
   }
 

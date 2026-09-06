@@ -128,3 +128,51 @@ export async function readRange(
   const body = (await response.json()) as { values?: string[][] };
   return body.values ?? [];
 }
+
+/** Имя переменной с id таблицы клиентов. Одно на всех, кто её читает. */
+export const CLIENTS_SHEET_VARIABLE = "CLIENTS_SHEET_ID";
+
+export type SheetTable = {
+  /** Шапка как есть, слева направо. */
+  headers: string[];
+  /** Строки без шапки; полностью пустые отброшены. */
+  rows: string[][];
+  /** Номер колонки по заголовку. -1 — такой колонки в шапке нет. */
+  at(header: string): number;
+};
+
+/**
+ * Открыть таблицу клиентов и разобрать шапку — один шаг на всех потребителей.
+ *
+ * Раньше это делали по копии «проверка связи» и счётчик сверки: одна и та же
+ * последовательность (взять id, взять ключ, сходить, проверить пустоту, срезать
+ * шапку) и одни и те же тексты ошибок, написанные дважды. Счётчики в этом проекте
+ * нарочно не делят код между собой, но здесь дублировались не счётчики,
+ * а ПРОЦЕДУРА ДОСТУПА к чужому сервису — а она обязана быть одна.
+ *
+ * Не бросает: возвращает problem человеческим языком, потому что и строка
+ * «проверки связи», и карточка счётчика обязаны уметь сказать «не прочитал»
+ * вместо пятисотой.
+ */
+export async function readClientsTable(
+  env: DashboardEnv,
+  range: string
+): Promise<SheetTable | { problem: string }> {
+  const sheetId = env.get(CLIENTS_SHEET_VARIABLE);
+  if (!sheetId) return { problem: `переменная ${CLIENTS_SHEET_VARIABLE} не задана в dashboard/.env` };
+
+  const key = readSheetKey(env);
+  if ("problem" in key) return { problem: key.problem };
+
+  try {
+    const values = await readRange(key.account, sheetId, range);
+    if (values.length === 0) return { problem: "таблица открылась, но она пустая — нет даже шапки" };
+
+    const headers = values[0].map((cell) => String(cell).trim());
+    const rows = values.slice(1).filter((row) => row.some((cell) => String(cell).trim() !== ""));
+
+    return { headers, rows, at: (header) => headers.indexOf(header) };
+  } catch (error) {
+    return { problem: (error as Error)?.message ?? "таблица не читается" };
+  }
+}

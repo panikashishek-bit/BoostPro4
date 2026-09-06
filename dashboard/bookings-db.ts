@@ -10,10 +10,20 @@ import type { DashboardEnv } from "./config";
 // целиком: переносишь пульт в другой проект — удаляешь этот файл и строку
 // счётчика «Сверка» в counters/registry.ts, остальное поедет как было.
 //
-// ПУЛЬТ ТОЛЬКО ЧИТАЕТ, и это не дисциплина, а свойство соединения: к адресу базы
-// дописывается default_transaction_read_only=on, и любую попытку записи отбивает
-// сам PostgreSQL. Тот же приём, что с SQLite (readOnly) и с Google (scope
-// readonly): защита должна стоять уровнем выше нашей внимательности.
+// ПУЛЬТ ТОЛЬКО ЧИТАЕТ. К адресу базы дописывается default_transaction_read_only=on,
+// и обычный запрос на запись отбивает сам PostgreSQL (ERROR 25006), а не наша
+// аккуратность: ни create/update/delete, ни сырой SQL через этот клиент не пройдут.
+//
+// ⚠️ Но честно про предел: это СЕССИОННАЯ НАСТРОЙКА, а не право роли. Код, который
+// откроет транзакцию явным BEGIN READ WRITE, снимет её с себя — PostgreSQL это
+// разрешает. То есть от случайной записи защита есть, от намеренной — нет, и в этом
+// она слабее двух соседних (SQLite readOnly и scope readonly у Google непреодолимы
+// для клиента вообще).
+//
+// Как сделать её настоящей: отдельная роль в PostgreSQL с одним GRANT SELECT и без
+// прав на запись. Тогда BEGIN READ WRITE тоже упрётся в permission denied. Пока роли
+// нет, правило простое: в ЭТОМ файле пишутся только чтения, и заводить транзакции
+// здесь нельзя.
 
 export const BOOKINGS_DB_VARIABLE = "BOOKINGS_DB_URL";
 
@@ -45,17 +55,33 @@ function readOnlyUrl(raw: string): string {
  *
  * На globalThis, потому что в dev-режиме Next перезагружает модули на каждую
  * правку, и без этого пул рос бы с каждым сохранением файла.
+ *
+ * ⚠️ Ключ кэша — САМ АДРЕС, а не просто «клиент уже есть». Пульт перечитывает
+ * .env на каждый запрос ровно затем, чтобы поправленный файл был виден по F5.
+ * Держи мы клиент без привязки к адресу — владелец исправил бы строку
+ * подключения, обновил страницу и увидел прежнюю ошибку, а мы бы продолжали
+ * ходить по старому адресу до перезапуска сервера.
  */
-const cache = globalThis as unknown as { dashboardPrisma?: PrismaClient };
+const cache = globalThis as unknown as { dashboardBookings?: { url: string; db: PrismaClient } };
 
 function client(url: string): PrismaClient {
-  if (!cache.dashboardPrisma) {
-    cache.dashboardPrisma = new PrismaClient({
-      datasourceUrl: readOnlyUrl(url),
-      log: ["error"],
-    });
-  }
-  return cache.dashboardPrisma;
+  const target = readOnlyUrl(url);
+  const kept = cache.dashboardBookings;
+  if (kept?.url === target && kept.db) return kept.db;
+
+  // Адрес сменился — старый пул больше не нужен. Закрываем, не дожидаясь ответа:
+  // висящее соединение к недоступной базе может отвечать долго, а страница ждать
+  // этого не должна.
+  //
+  // Через ?. насквозь: в dev-режиме на globalThis может лежать значение, которое
+  // положила ПРЕДЫДУЩАЯ версия этого файла, — горячая перезагрузка меняет код,
+  // но не то, что уже сохранено рядом с процессом. Обращение к полю по памяти
+  // о старой форме роняет счётчик так, что причина выглядит совершенно посторонней.
+  void kept?.db?.$disconnect?.().catch(() => {});
+
+  const db = new PrismaClient({ datasourceUrl: target, log: ["error"] });
+  cache.dashboardBookings = { url: target, db };
+  return db;
 }
 
 export type BookingsResult =

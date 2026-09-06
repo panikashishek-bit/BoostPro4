@@ -7,7 +7,7 @@ import {
 import { resolvePeriod, PERIODS, type Period, type PeriodKey } from "./period";
 import { countDemo, dashboardHref, resolveDemo, type Demo } from "./demo";
 import { DayChart } from "./day-chart";
-import type { Counter } from "./counters/types";
+import type { Counter, CounterCase, CounterFigure, CounterNote } from "./counters/types";
 import { isAuthed } from "./auth";
 import { login, logout } from "./actions";
 import { plural } from "./plural";
@@ -363,7 +363,7 @@ function DemoSwitch({ period, demo }: { period: Period; demo: Demo }) {
  * Стоят рядом и одинаковым кеглем нарочно: смысл в их сравнении, и стоит
  * выделить одно — глаз начнёт считать его главным, а главного среди них нет.
  */
-function Figures({ figures }: { figures: NonNullable<CollectedCounter["value"]>["figures"] }) {
+function Figures({ figures }: { figures?: CounterFigure[] }) {
   return (
     <dl className="mt-4 flex flex-wrap gap-x-6 gap-y-2">
       {figures?.map((figure) => (
@@ -387,7 +387,7 @@ function Figures({ figures }: { figures: NonNullable<CollectedCounter["value"]>[
  * Первые пять открыты, остальные — под «показать все»: список на сотню строк
  * никто не читает, а первые пять читают всегда.
  */
-function Cases({ cases }: { cases: NonNullable<CollectedCounter["value"]>["cases"] }) {
+function Cases({ cases }: { cases?: CounterCase[] }) {
   const all = cases ?? [];
   const head = all.slice(0, 5);
   const rest = all.slice(5);
@@ -416,7 +416,7 @@ function Cases({ cases }: { cases: NonNullable<CollectedCounter["value"]>["cases
   );
 }
 
-function CaseRow({ one }: { one: NonNullable<NonNullable<CollectedCounter["value"]>["cases"]>[number] }) {
+function CaseRow({ one }: { one: CounterCase }) {
   return (
     <li
       className={`rounded-xl border px-3 py-2.5 text-xs ${
@@ -446,7 +446,7 @@ function CaseRow({ one }: { one: NonNullable<NonNullable<CollectedCounter["value
  * Смысл несёт текст, а не цвет: строку должно быть понятно и в чёрно-белой печати,
  * и тому, кто не различает оттенки. Цвет только подчёркивает.
  */
-function Notes({ notes }: { notes: NonNullable<CollectedCounter["value"]>["notes"] }) {
+function Notes({ notes }: { notes?: CounterNote[] }) {
   return (
     <ul className="mt-3 space-y-1.5">
       {notes?.map((note, index) => (

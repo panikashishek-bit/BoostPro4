@@ -1,8 +1,6 @@
-import { readSheetKey, readRange } from "../sheets";
+import { readClientsTable } from "../sheets";
 import { plural } from "../plural";
 import type { HealthSource } from "./types";
-
-const SHEET_VARIABLE = "CLIENTS_SHEET_ID";
 
 // Таблица клиентов — та же Google-таблица, куда бот пишет журнал обращений:
 // одна строка на обращение, шапку задаёт владелец.
@@ -25,62 +23,50 @@ export const clientsTableSource: HealthSource = {
   title: "таблица клиентов",
 
   async check(env) {
-    const sheetId = env.get(SHEET_VARIABLE);
-    if (!sheetId) {
-      return { state: "missing", detail: `переменная ${SHEET_VARIABLE} не задана в dashboard/.env` };
+    // Читать таблицу умеет один помощник на весь пульт: и эта строка, и счётчик
+    // «Сверка» ходят в неё одинаково, и тексты «не прочитал» у них общие.
+    const table = await readClientsTable(env, "A1:Z2000");
+
+    if ("problem" in table) {
+      // Не задан id или ключ — это «не подключено», а не поломка: пульт просто
+      // ещё не познакомили с таблицей. Всё остальное — «настроено и не читается».
+      const notConnected = table.problem.includes("не задана") || table.problem.includes("ключ");
+      return { state: notConnected ? "missing" : "broken", detail: table.problem };
     }
 
-    const key = readSheetKey(env);
-    if ("problem" in key) {
-      return { state: "missing", detail: key.problem };
+    const { headers, rows } = table;
+
+    if (rows.length === 0) {
+      return { state: "ok", detail: "таблица на связи, обращений в ней пока нет" };
     }
 
-    try {
-      const values = await readRange(key.account, sheetId, "A1:Z2000");
+    // Учебные строки называем вслух: без этого «205 обращений» выглядит
+    // как двести настоящих клиентов, которых на самом деле девять.
+    const demoAt = table.at(DEMO_COLUMN);
+    const demo =
+      demoAt === -1
+        ? 0
+        : rows.filter((row) => String(row[demoAt] ?? "").trim().toLowerCase() === DEMO_VALUE).length;
+    const drawn = demo > 0 ? `, из них ${demo} учебных (npm run demo:wipe сотрёт)` : "";
 
-      if (values.length === 0) {
-        return { state: "broken", detail: "таблица открылась, но она пустая — нет даже шапки" };
-      }
-
-      const headers = values[0].map((cell) => String(cell).trim());
-      const rows = values.slice(1).filter((row) => row.some((cell) => String(cell).trim() !== ""));
-
-      if (rows.length === 0) {
-        return { state: "ok", detail: "таблица на связи, обращений в ней пока нет" };
-      }
-
-      // Учебные строки называем вслух: без этого «205 обращений» выглядит
-      // как двести настоящих клиентов, которых на самом деле девять.
-      const demoAt = headers.indexOf(DEMO_COLUMN);
-      const demo =
-        demoAt === -1
-          ? 0
-          : rows.filter((row) => String(row[demoAt] ?? "").trim().toLowerCase() === DEMO_VALUE).length;
-      const drawn = demo > 0 ? `, из них ${demo} учебных (npm run demo:wipe сотрёт)` : "";
-
-      const at = headers.indexOf(CREATED_AT_COLUMN);
-      if (at === -1) {
-        return {
-          state: "ok",
-          detail: `таблица на связи: ${rows.length} ${plural(rows.length, "обращение", "обращения", "обращений")}${drawn}; колонки «${CREATED_AT_COLUMN}» в шапке нет`,
-        };
-      }
-
-      // Даты записаны как «ГГГГ-ММ-ДД ЧЧ:ММ:СС» — в этом виде они сравниваются как текст.
-      const last = rows.reduce((newest, row) => {
-        const value = String(row[at] ?? "").trim();
-        return value > newest ? value : newest;
-      }, "");
-
+    const at = headers.indexOf(CREATED_AT_COLUMN);
+    if (at === -1) {
       return {
         state: "ok",
-        detail: `таблица на связи: ${rows.length} ${plural(rows.length, "обращение", "обращения", "обращений")}${drawn}, последнее ${last || "без даты"}`,
+        detail: `таблица на связи: ${rows.length} ${plural(rows.length, "обращение", "обращения", "обращений")}${drawn}; колонки «${CREATED_AT_COLUMN}» в шапке нет`,
       };
-    } catch (error) {
-      // Google недоступен или ключ протух — это «настроено, но не читается»,
-      // а не «не подключено»: разница видна по цвету строки.
-      return { state: "broken", detail: (error as Error)?.message ?? "таблица не читается" };
     }
+
+    // Даты записаны как «ГГГГ-ММ-ДД ЧЧ:ММ:СС» — в этом виде они сравниваются как текст.
+    const last = rows.reduce((newest, row) => {
+      const value = String(row[at] ?? "").trim();
+      return value > newest ? value : newest;
+    }, "");
+
+    return {
+      state: "ok",
+      detail: `таблица на связи: ${rows.length} ${plural(rows.length, "обращение", "обращения", "обращений")}${drawn}, последнее ${last || "без даты"}`,
+    };
   },
 };
 
