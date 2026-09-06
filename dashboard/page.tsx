@@ -1,4 +1,13 @@
-import { readDashboardEnv, dashboardPassword, DEFAULT_PASSWORD, type DashboardEnv } from "./config";
+import {
+  readDashboardEnv,
+  dashboardPassword,
+  DEFAULT_PASSWORD,
+  DASHBOARD_PATH,
+  type DashboardEnv,
+} from "./config";
+import { resolvePeriod, PERIODS, type Period, type PeriodKey } from "./period";
+import { DayChart } from "./day-chart";
+import type { Counter } from "./counters/types";
 import { isAuthed } from "./auth";
 import { login, logout } from "./actions";
 import { runHealthChecks, type CheckedSource } from "./health/registry";
@@ -14,15 +23,26 @@ import type { HealthState } from "./health/types";
 // маршрута, и переэкспорт отсюда он может не заметить — страница тихо начала бы
 // кэшироваться, то есть показывать вчерашние цифры с уверенным видом.
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  // Период приезжает адресом (?period=30d). Next отдаёт searchParams самой странице,
+  // поэтому точку подключения в приложении трогать не пришлось.
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const env = readDashboardEnv();
 
   if (!(await isAuthed())) {
     return <LoginScreen env={env} />;
   }
 
+  const period = resolvePeriod((await searchParams)?.period);
+
   // Проверки и счётчики независимы — считаем их разом, а не по очереди.
-  const [checks, counters] = await Promise.all([runHealthChecks(env), collectCounters(env)]);
+  const [checks, counters] = await Promise.all([
+    runHealthChecks(env),
+    collectCounters({ env, period }),
+  ]);
 
   return (
     <div className="space-y-10">
@@ -41,7 +61,7 @@ export default async function DashboardPage() {
       </header>
 
       <ConnectionCheck env={env} checks={checks} />
-      <CommandCentre counters={counters} />
+      <CommandCentre counters={counters} period={period} />
     </div>
   );
 }
@@ -155,10 +175,16 @@ function ConnectionCheck({ env, checks }: { env: DashboardEnv; checks: CheckedSo
 
 // --- Командный центр ---
 
-function CommandCentre({ counters }: { counters: CollectedCounter[] }) {
+function CommandCentre({ counters, period }: { counters: CollectedCounter[]; period: Period }) {
   return (
-    <section className="space-y-3">
-      <h2 className="text-lg font-semibold text-ink">Мой командный центр</h2>
+    <section className="space-y-4">
+      {/* Переключатель периода стоит ОДНОЙ строкой над всеми счётчиками, а не внутри
+          карточки. Фильтр, спрятанный в карточку, обманывает: соседние цифры остаются
+          за другой период, и сравнивать их уже нельзя. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold text-ink">Мой командный центр</h2>
+        <PeriodSwitch active={period.key} />
+      </div>
 
       {COUNTERS.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-line bg-surface px-4 py-10 text-center">
@@ -168,19 +194,37 @@ function CommandCentre({ counters }: { counters: CollectedCounter[] }) {
           </p>
         </div>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           {counters.map(({ counter, value, problem }) => (
-            <div key={counter.id} className="rounded-2xl border border-line bg-surface p-4">
-              <p className="text-sm text-muted">{counter.title}</p>
+            <div
+              key={counter.id}
+              className={`rounded-2xl border border-line bg-surface p-4 sm:p-5 ${
+                value?.chart ? "sm:col-span-2" : ""
+              }`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-sm text-muted">{counter.title}</p>
+                <CounterInfo counter={counter} />
+              </div>
+
               {value ? (
                 <>
-                  <p className="mt-1 font-display text-2xl font-bold text-ink">{value.value}</p>
-                  {value.caption && <p className="mt-0.5 text-xs text-muted">{value.caption}</p>}
+                  {/* Крупная цифра — обычным шрифтом текста и без моноширинных цифр:
+                      акцидентный шрифт на числе читается как украшение, а равная
+                      ширина знаков делает короткое число рыхлым. */}
+                  <p className="mt-1 text-3xl font-bold tracking-tight text-ink">{value.value}</p>
+                  {value.caption && <p className="mt-0.5 text-sm text-muted">{value.caption}</p>}
+                  {value.notes?.length ? <Notes notes={value.notes} /> : null}
+                  {value.chart && (
+                    <div className="mt-5">
+                      <DayChart title={value.chart.title} days={value.chart.days} />
+                    </div>
+                  )}
                 </>
               ) : (
                 /* Счётчик упал — здесь «нет данных», а соседи и страница живут дальше. */
                 <>
-                  <p className="mt-1 font-display text-2xl font-bold text-muted">нет данных</p>
+                  <p className="mt-1 text-3xl font-bold text-muted">нет данных</p>
                   {problem && <p className="mt-0.5 break-words text-xs text-muted">{problem}</p>}
                 </>
               )}
@@ -189,5 +233,74 @@ function CommandCentre({ counters }: { counters: CollectedCounter[] }) {
         </div>
       )}
     </section>
+  );
+}
+
+// --- Период, сигналы и пояснение ---
+
+function PeriodSwitch({ active }: { active: PeriodKey }) {
+  return (
+    <nav aria-label="Период" className="flex gap-1 rounded-xl border border-line bg-surface p-1">
+      {PERIODS.map((p) => (
+        <a
+          key={p.key}
+          href={`${DASHBOARD_PATH}?period=${p.key}`}
+          aria-current={p.key === active ? "page" : undefined}
+          className={`inline-flex min-h-11 items-center rounded-lg px-3 text-sm transition ${
+            p.key === active
+              ? "bg-brand-soft font-medium text-brand"
+              : "text-muted hover:bg-brand-soft hover:text-brand"
+          }`}
+        >
+          {p.label}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+/**
+ * Сигналы к действию под цифрой.
+ *
+ * Смысл несёт текст, а не цвет: строку должно быть понятно и в чёрно-белой печати,
+ * и тому, кто не различает оттенки. Цвет только подчёркивает.
+ */
+function Notes({ notes }: { notes: NonNullable<CollectedCounter["value"]>["notes"] }) {
+  return (
+    <ul className="mt-3 space-y-1.5">
+      {notes?.map((note, index) => (
+        <li key={index} className="flex gap-2 text-xs">
+          <span aria-hidden className={note.tone === "alarm" ? "text-amber-600" : "text-muted"}>
+            {note.tone === "alarm" ? "⚠" : "·"}
+          </span>
+          <span className={note.tone === "alarm" ? "text-ink" : "text-muted"}>{note.text}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * Значок ℹ️ у счётчика: по клику — откуда данные, как считается, что значит сигнал.
+ *
+ * Обычный details, без клиентского кода. Панель всплывает поверх карточки, а не
+ * раздвигает её: иначе цифра прыгала бы вниз при каждом открытии.
+ */
+function CounterInfo({ counter }: { counter: Counter }) {
+  return (
+    <details className="relative shrink-0">
+      <summary
+        className="inline-flex min-h-11 cursor-pointer list-none items-center px-1 text-muted transition hover:text-brand [&::-webkit-details-marker]:hidden"
+        aria-label={`Как считается «${counter.title}»`}
+        title={`Как считается «${counter.title}»`}
+      >
+        {"ℹ️"}
+      </summary>
+      <div className="absolute right-0 z-10 mt-1 w-80 max-w-[78vw] space-y-2 rounded-xl border border-line bg-surface p-3 text-xs leading-relaxed text-muted shadow-lg">
+        {counter.info.map((paragraph, index) => (
+          <p key={index}>{paragraph}</p>
+        ))}
+      </div>
+    </details>
   );
 }

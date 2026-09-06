@@ -1,4 +1,5 @@
 import { readSheetKey, readRange } from "../sheets";
+import { plural } from "../plural";
 import type { HealthSource } from "./types";
 
 const SHEET_VARIABLE = "CLIENTS_SHEET_ID";
@@ -48,7 +49,7 @@ export const clientsTableSource: HealthSource = {
       if (at === -1) {
         return {
           state: "ok",
-          detail: `таблица на связи: ${rows.length} ${plural(rows.length)}; колонки «${CREATED_AT_COLUMN}» в шапке нет`,
+          detail: `таблица на связи: ${rows.length} ${plural(rows.length, "обращение", "обращения", "обращений")}; колонки «${CREATED_AT_COLUMN}» в шапке нет`,
         };
       }
 
@@ -60,7 +61,7 @@ export const clientsTableSource: HealthSource = {
 
       return {
         state: "ok",
-        detail: `таблица на связи: ${rows.length} ${plural(rows.length)}, последнее ${last || "без даты"}`,
+        detail: `таблица на связи: ${rows.length} ${plural(rows.length, "обращение", "обращения", "обращений")}, последнее ${last || "без даты"}`,
       };
     } catch (error) {
       // Google недоступен или ключ протух — это «настроено, но не читается»,
@@ -70,18 +71,3 @@ export const clientsTableSource: HealthSource = {
   },
 };
 
-/** «1 обращение», «2 обращения», «5 обращений». */
-function plural(n: number): string {
-  const tens = n % 100;
-  if (tens >= 11 && tens <= 14) return "обращений";
-  switch (n % 10) {
-    case 1:
-      return "обращение";
-    case 2:
-    case 3:
-    case 4:
-      return "обращения";
-    default:
-      return "обращений";
-  }
-}

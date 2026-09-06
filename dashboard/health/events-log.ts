@@ -1,4 +1,5 @@
 import { openEventsDb } from "../events-db";
+import { plural } from "../plural";
 import type { HealthSource } from "./types";
 
 // Лог событий бота. Единственный способ владельца убедиться, что запись работает:
@@ -35,7 +36,7 @@ export const eventsLogSource: HealthSource = {
 
       return {
         state: "ok",
-        detail: `база найдена: ${total} ${plural(total)}, последнее ${last}`,
+        detail: `база найдена: ${total} ${plural(total, "событие", "события", "событий")}, последнее ${last}`,
       };
     } catch (error) {
       // Файл есть, но таблицы в нём нет — обычно это чужой .db или база, которую
@@ -50,18 +51,3 @@ export const eventsLogSource: HealthSource = {
   },
 };
 
-/** «1 событие», «2 события», «5 событий» — иначе строка выглядит машинно. */
-function plural(n: number): string {
-  const tens = n % 100;
-  if (tens >= 11 && tens <= 14) return "событий";
-  switch (n % 10) {
-    case 1:
-      return "событие";
-    case 2:
-    case 3:
-    case 4:
-      return "события";
-    default:
-      return "событий";
-  }
-}
