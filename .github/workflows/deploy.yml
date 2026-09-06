@@ -10,6 +10,7 @@
 #   журнал:   SHEET_ID (id таблицы «Клиенты») · GOOGLE_SA_KEY (JSON служебного аккаунта целиком)
 #   сервисы:  TELEGRAM_BOT_TOKEN · OPENROUTER_API_KEY · ASSEMBLYAI_API_KEY
 #   свои:     APP_API_KEY · APP_API_URL · ADMIN_PASSWORD · POSTGRES_PASSWORD
+#   пульт:    DASHBOARD_PASSWORD (необязателен; без него пульт получит admin)
 #
 # Секретов в репозитории нет: .env собирается на сервере во время деплоя.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -46,7 +47,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
-          source: "src,prisma,public,faq,bot_administrator,package.json,package-lock.json,next.config.ts,tsconfig.json,postcss.config.mjs,Dockerfile,.dockerignore,docker-compose.prod.yml"
+          source: "src,dashboard,prisma,public,faq,bot_administrator,package.json,package-lock.json,next.config.ts,tsconfig.json,postcss.config.mjs,Dockerfile,.dockerignore,docker-compose.prod.yml"
           target: ${{ secrets.SERVER_PATH }}
           overwrite: true
           rm: false
@@ -55,13 +56,14 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           SERVER_PATH: ${{ secrets.SERVER_PATH }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           command_timeout: 20m
-          envs: SERVER_PATH
+          envs: SERVER_PATH,DEPLOY_PATH
           script: |
             set -e
             cd "$SERVER_PATH"
@@ -104,6 +106,35 @@ jobs:
             fi
             rm -f sa-key.json
 
+            # --- Настройки пульта ---
+            # У пульта свой .env, отдельный от .env приложения: он читает только его.
+            # Деплоем этот файл не едет (секреты в git не хранятся), поэтому создаём
+            # его здесь — и только если его ещё нет.
+            #
+            # Не перезаписываем существующий сознательно: в него дописываются пути
+            # к источникам данных, которые есть только на сервере. Переписывать файл
+            # на каждый деплой значило бы молча стирать их.
+            #
+            # Файл обязан существовать ДО compose up: он смонтирован в контейнер томом,
+            # а docker на месте отсутствующего файла создаёт ПАПКУ, и пульт потом
+            # не может прочитать свои настройки.
+            mkdir -p dashboard
+            if [ -f dashboard/.env ]; then
+              echo "dashboard/.env уже есть — не трогаю"
+            else
+              cat > dashboard/.env <<DASHENV
+            DASHBOARD_PASSWORD=${{ secrets.DASHBOARD_PASSWORD }}
+            EVENTS_DB_PATH=
+            CLIENTS_SHEET_ID=
+            TRANSCRIPTS_DIR=
+            DASHENV
+              # Секрет не заведён — ставим admin. Пустая переменная означала бы,
+              # что вход закрыт для всех, включая хозяина: пульт молчал бы на любой пароль.
+              sed -i 's/^DASHBOARD_PASSWORD=$/DASHBOARD_PASSWORD=admin/' dashboard/.env
+              chmod 600 dashboard/.env
+              echo "dashboard/.env создан"
+            fi
+
             echo "=== сборка и запуск ==="
             docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
 
@@ -132,6 +163,40 @@ jobs:
             docker compose -f docker-compose.prod.yml ps
             echo "=== последние строки лога бота ==="
             docker compose -f docker-compose.prod.yml logs --tail=15 bot
+
+            # --- Пульт наружу ---
+            # Приложение слушает только 127.0.0.1:3000. Публичный порт один — 80,
+            # на нём nginx отдаёт статику штаба. Учим его вдобавок отдавать /dashboard.
+            #
+            # Шаг не роняет деплой ни при какой неудаче: связка уже работает,
+            # и остаться без сайта из-за правки веб-сервера — плохой размен.
+            if [ -z "$DEPLOY_PATH" ]; then
+              echo "ВНИМАНИЕ: DEPLOY_PATH пуст, корень статики неизвестен — nginx не трогаю."
+            elif ! command -v nginx >/dev/null 2>&1; then
+              echo "ВНИМАНИЕ: nginx на боксе нет — пульт снаружи не откроется."
+            elif ! sudo -n true 2>/dev/null; then
+              echo "ВНИМАНИЕ: нет sudo без пароля — конфиг nginx не поставить автоматически."
+              echo "Поставь вручную: dashboard/deploy/nginx-dashboard.conf → /etc/nginx/sites-available/default"
+            else
+              SITE=/etc/nginx/sites-available/default
+              sed "s|__STATIC_ROOT__|$DEPLOY_PATH|" dashboard/deploy/nginx-dashboard.conf > /tmp/dashboard-site.conf
+
+              if sudo cmp -s /tmp/dashboard-site.conf "$SITE"; then
+                echo "конфиг nginx уже актуален"
+              else
+                # Резервная копия — до записи. Битый конфиг откатываем сразу:
+                # публичный адрес важнее пульта.
+                sudo cp -n "$SITE" "$SITE.before-dashboard" 2>/dev/null || true
+                sudo cp /tmp/dashboard-site.conf "$SITE"
+                if sudo nginx -t 2>/dev/null; then
+                  sudo systemctl reload nginx && echo "nginx обновлён: /dashboard смотрит наружу"
+                else
+                  echo "ВНИМАНИЕ: nginx отверг конфиг — откатываю, сайт остаётся как был."
+                  sudo cp "$SITE.before-dashboard" "$SITE" && sudo systemctl reload nginx || true
+                fi
+              fi
+              rm -f /tmp/dashboard-site.conf
+            fi
 
             # Связка поднята — теперь можно и упасть, чтобы проблема с ключом не потерялась.
             [ "$KEY_OK" = "1" ] || { echo "деплой прошёл, но журнал обращений не настроен"; exit 1; }

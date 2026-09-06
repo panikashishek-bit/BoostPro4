@@ -19,6 +19,6 @@
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "_комментарий": "bot_administrator — отдельный пакет со своим tsconfig и своими зависимостями. Без исключения Next тянет его файлы на проверку типов и падает на импорте grammy.",
-  "exclude": ["node_modules", "bot_administrator"]
+  "_комментарий": "bot_administrator и manager — отдельные пакеты со своими tsconfig и своими зависимостями. Без исключения Next тянет их файлы на проверку типов: на bot_administrator падает импорт grammy, на manager — именованные группы в регулярках (у него target новее, чем ES2017 у приложения).",
+  "exclude": ["node_modules", "bot_administrator", "manager"]
 }

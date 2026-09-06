@@ -4,6 +4,11 @@ node_modules
 .env
 .env.*
 !.env.example
+# Настройки пульта в образ не попадают: он получает их томом во время работы.
+# Правила выше срабатывают только в корне, вложенный файл нужно назвать отдельно.
+dashboard/.env
+dashboard/.env.*
+!dashboard/.env.example
 bot_administrator/node_modules
 bot_administrator/data
 bot_administrator/.env
