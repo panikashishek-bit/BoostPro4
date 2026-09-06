@@ -57,13 +57,14 @@ jobs:
         env:
           SERVER_PATH: ${{ secrets.SERVER_PATH }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           command_timeout: 20m
-          envs: SERVER_PATH,DEPLOY_PATH
+          envs: SERVER_PATH,DEPLOY_PATH,DASHBOARD_PASSWORD
           script: |
             set -e
             cd "$SERVER_PATH"
@@ -122,15 +123,21 @@ jobs:
             if [ -f dashboard/.env ]; then
               echo "dashboard/.env уже есть — не трогаю"
             else
-              cat > dashboard/.env <<DASHENV
-            DASHBOARD_PASSWORD=${{ secrets.DASHBOARD_PASSWORD }}
+              # Секрет не заведён — ставим admin. Пустая переменная означала бы,
+              # что вход закрыт для всех, включая хозяина: пульт молчал бы на любой пароль.
+              : "${DASHBOARD_PASSWORD:=admin}"
+
+              # Пароль пишем printf-ом из переменной, а НЕ строкой внутри heredoc.
+              # Внутри heredoc с неэкранированным словом оболочка разбирает тело:
+              # пароль с $ молча обрезался бы, а с обратными кавычками — выполнился
+              # бы как команда прямо здесь. Рядом, для ключа Google, ровно поэтому
+              # стоит <<'KEYFILE' в кавычках.
+              { printf 'DASHBOARD_PASSWORD='; printf '%s' "$DASHBOARD_PASSWORD"; echo; } > dashboard/.env
+              cat >> dashboard/.env <<'DASHENV'
             EVENTS_DB_PATH=
             CLIENTS_SHEET_ID=
             TRANSCRIPTS_DIR=
             DASHENV
-              # Секрет не заведён — ставим admin. Пустая переменная означала бы,
-              # что вход закрыт для всех, включая хозяина: пульт молчал бы на любой пароль.
-              sed -i 's/^DASHBOARD_PASSWORD=$/DASHBOARD_PASSWORD=admin/' dashboard/.env
               chmod 600 dashboard/.env
               echo "dashboard/.env создан"
             fi
